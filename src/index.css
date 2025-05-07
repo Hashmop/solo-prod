@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+.todo-item-enter {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+.todo-item-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: all 300ms ease-in;
+}
+.todo-item-exit {
+  opacity: 1;
+  transform: translateY(0);
+}
+.todo-item-exit-active {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: all 300ms ease-in;
+}
+/* Solo Leveling theme transitions */
+.theme-transition * {
+  transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+}
+
+/* matrix-like terminal effect */
+@keyframes terminal-glitch {
+  0% { opacity: 0.9; }
+  50% { opacity: 1; }
+  100% { opacity: 0.9; }
+}
+
+.system-terminal::after {
+  content: '_';
+  animation: blink 1s step-end infinite;
+  color: var(--system-accent);
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
