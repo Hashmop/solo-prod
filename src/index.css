@@ -2,57 +2,172 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #0d1117;
+  color: #ffffff;
 }
 
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
-.todo-item-enter {
-  opacity: 0;
-  transform: translateY(-10px);
-}
-.todo-item-enter-active {
-  opacity: 1;
-  transform: translateY(0);
-  transition: all 300ms ease-in;
-}
-.todo-item-exit {
-  opacity: 1;
-  transform: translateY(0);
-}
-.todo-item-exit-active {
-  opacity: 0;
-  transform: translateY(-10px);
-  transition: all 300ms ease-in;
-}
-/* Solo Leveling theme transitions */
-.theme-transition * {
-  transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+/* Glowing effects */
+.glow {
+  text-shadow: 0 0 15px var(--system-glow);
 }
 
-/* matrix-like terminal effect */
-@keyframes terminal-glitch {
-  0% { opacity: 0.9; }
-  50% { opacity: 1; }
-  100% { opacity: 0.9; }
+.system-border {
+  border: 1px solid #00f7ff50;
+  box-shadow: 0 0 25px rgba(0, 247, 255, 0.1);
 }
 
-.system-terminal::after {
-  content: '_';
-  animation: blink 1s step-end infinite;
-  color: var(--system-accent);
+.dungeon-border {
+  border: 1px solid #ff6b3550;
+  box-shadow: 0 0 15px rgba(255, 107, 53, 0.2);
 }
 
-@keyframes blink {
-  50% { opacity: 0; }
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  background-color: #1a0d35;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #ff6b35;
+  border-radius: 4px;
+}
+
+/* New color variables */
+.bg-dungeon-primary { background-color: #1a0d35; }
+.bg-dungeon-secondary { background-color: #2d0f3a; }
+.text-dungeon-accent { color: #ff6b35; }
+.border-dungeon-accent { border-color: #ff6b35; }
+
+/* Global dungeon styling */
+.dungeon-border {
+  border: 1px solid var(--dungeon-accent);
+  box-shadow: 0 0 15px rgba(255, 107, 53, 0.2);
+}
+
+.dungeon-card {
+  background: rgba(26, 13, 53, 0.8);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+
+/* Update Todo List (App.jsx) */
+.todo-item {
+  background: rgba(42, 15, 69, 0.5);
+  border: 1px solid var(--dungeon-accent);
+  transition: all 0.3s ease;
+}
+
+.todo-item:hover {
+  background: rgba(255, 107, 53, 0.1);
+  transform: translateX(5px);
+}
+
+/* Update Profile Modal (App.jsx) */
+.profile-modal {
+  background: linear-gradient(
+    145deg,
+    var(--dungeon-primary) 0%,
+    var(--dungeon-secondary) 100%
+  );
+  border: 2px solid var(--dungeon-accent);
+}
+
+/* Update Timer Cards (App.jsx) */
+.timer-card {
+  background: rgba(42, 15, 69, 0.3);
+  transition: all 0.3s ease;
+}
+
+.timer-card.active {
+  background: rgba(255, 107, 53, 0.2);
+  box-shadow: 0 0 20px rgba(255, 107, 53, 0.3);
+}
+
+
+/* Update Heatmap (App.jsx) */
+.heatmap-cell {
+  background: rgba(42, 15, 69, 0.5);
+  border: 1px solid var(--dungeon-accent);
+}
+
+/* Update Buttons (global) */
+.dungeon-button {
+  background: var(--dungeon-accent);
+  color: black;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+}
+
+.dungeon-button:hover {
+  background: #ff824b;
+  transform: scale(1.05);
+}
+
+.system-panel {
+  @apply bg-[#1a1a2f] border border-[#00f7ff]/20 rounded-lg p-6 shadow-glow;
+}
+
+.system-input {
+  @apply bg-[#0a0a1a] text-[#00f7ff] px-3 py-2 rounded border border-[#00f7ff]/30 
+         placeholder-[#00f7ff]/50 focus:outline-none focus:border-[#00f7ff]/50;
+}
+
+.system-button {
+  @apply bg-[#00f7ff]/10 hover:bg-[#00f7ff]/20 text-[#00f7ff] p-2 rounded-lg 
+         transition-all duration-200;
+}
+
+.system-icon-button {
+  @apply hover:bg-[#00f7ff]/10 p-1 rounded transition-colors;
+}
+
+.system-checkbox {
+  @apply w-5 h-5 bg-[#0a0a1a] border border-[#00f7ff]/30 rounded-sm 
+         checked:bg-[#00f7ff] checked:border-transparent;
+}
+.system-divider {
+  border-bottom: 1px solid var(--system-border);
+  margin: 1.5rem 0;
+}
+
+.shadow-glow {
+  box-shadow: 0 0 15px rgba(0, 247, 255, 0.1);
+}
+
+.glow-text {
+  text-shadow: 0 0 10px rgba(0, 247, 255, 0.5);
+}
+
+.digital-font {
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+}
+
+/* Hide number input spinners for Chrome, Safari, Edge, Opera */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Hide number input spinners for Firefox */
+input[type=number] {
+  -moz-appearance: textfield;
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Music, Volume2, VolumeX, Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 
-const MusicPlayer = ({ theme }) => {
+const MusicPlayer = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
   const [progress, setProgress] = useState(0);
@@ -62,11 +62,7 @@ const MusicPlayer = ({ theme }) => {
   };
 
   return (
-    <div className={`fixed bottom-4 right-4 rounded-xl p-4 shadow-xl w-80 ${
-      theme === 'system' 
-        ? 'system-border bg-system-secondary glow-effect' 
-        : 'bg-gray-800/90 backdrop-blur-sm border border-gray-700'
-    }`}>
+    <div className="fixed bottom-4 right-4 bg-gray-800/90 backdrop-blur-sm rounded-xl p-4 shadow-xl border border-gray-700 w-80">
       <audio 
         ref={audioRef}
         src={tracks[currentTrack].url}
