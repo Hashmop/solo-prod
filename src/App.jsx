@@ -57,36 +57,125 @@ const ProductivityTracker = () => {
   ]);
 
   // Shadow Arise Mechanics
+  const SHADOW_POOL = [
+    {
+      key: 'iggris',
+      name: 'Igris',
+      rank: 'Knight',
+      rarity: 'Rare',
+      baseBuffs: { xp: 0.10 },
+      buffsPerLevel: { xp: 0.02 },
+      description: 'Loyal knight. Increases XP gain.'
+    },
+    {
+      key: 'beru',
+      name: 'Beru',
+      rank: 'Marshal',
+      rarity: 'Legendary',
+      baseBuffs: { xp: 0.15, studyEff: 0.05 },
+      buffsPerLevel: { xp: 0.03, studyEff: 0.01 },
+      description: 'Ant king. Boosts XP and study efficiency.'
+    },
+    {
+      key: 'tusk',
+      name: 'Tusk',
+      rank: 'Mage',
+      rarity: 'Epic',
+      baseBuffs: { xp: 0.10, coins: 0.10 },
+      buffsPerLevel: { xp: 0.02, coins: 0.02 },
+      description: 'Orc shaman. Grants XP and bonus coins.'
+    },
+    {
+      key: 'iron',
+      name: 'Iron',
+      rank: 'Tank',
+      rarity: 'Rare',
+      baseBuffs: { xp: 0.05, idle: 0.10 },
+      buffsPerLevel: { xp: 0.01, idle: 0.02 },
+      description: 'Steadfast knight. Turns idle time into XP.'
+    },
+    {
+      key: 'fangs',
+      name: 'Fangs',
+      rank: 'Assassin',
+      rarity: 'Uncommon',
+      baseBuffs: { xp: 0.07, play: 0.05 },
+      buffsPerLevel: { xp: 0.01, play: 0.01 },
+      description: 'Silent killer. Makes playtime productive.'
+    },
+    {
+      key: 'kaisel',
+      name: 'Kaisel',
+      rank: 'Mount',
+      rarity: 'Epic',
+      baseBuffs: { xp: 0.10, quest: 0.05 },
+      buffsPerLevel: { xp: 0.02, quest: 0.01 },
+      description: 'Flying wyvern. Helps finish tasks faster.'
+    },
+  ];
+  const RARITY_COLORS = {
+    Legendary: '#ffd700',
+    Epic: '#a259ff',
+    Rare: '#00f7ff',
+    Uncommon: '#4ade80',
+  };
+  const MAX_SHADOW_LEVEL = 10;
+  const LEVEL_UP_COST = lvl => 200 + lvl * 100;
+  const BUFF_CAPS = { xp: 1.0, studyEff: 0.5, coins: 1.0, idle: 0.5, play: 0.5, quest: 0.5 };
+
+  const getRandomShadowFromPool = () => {
+    // Weighted by rarity
+    const pool = [
+      ...Array(1).fill(SHADOW_POOL[1]), // Beru (Legendary)
+      ...Array(2).fill(SHADOW_POOL[2]), // Tusk (Epic)
+      ...Array(2).fill(SHADOW_POOL[5]), // Kaisel (Epic)
+      ...Array(4).fill(SHADOW_POOL[0]), // Igris (Rare)
+      ...Array(4).fill(SHADOW_POOL[3]), // Iron (Rare)
+      ...Array(7).fill(SHADOW_POOL[4]), // Fangs (Uncommon)
+    ];
+    return pool[Math.floor(Math.random() * pool.length)];
+  };
+
+  // --- Unboxing Modal State ---
+  const [unboxShadow, setUnboxShadow] = useState(null);
+
+  // --- Update arise logic: one by one ---
   const attemptArise = () => {
     if (ariseCount === 0) {
       setAriseMessageType('error');
-      setAriseMessage("You need to complete a Daily Gate to Arise a Shadow!");
+      setAriseMessage('You need to complete a Daily Gate to Arise a Shadow!');
       return;
     }
-    let obtainedShadows = [];
-    let attempts = ariseCount;
-    let newShadows = [...shadows];
-    while (attempts > 0 && newShadows.length < shadowSlots) {
-      if (Math.random() < 0.1) {
-        obtainedShadows.push({
-          id: Date.now() + attempts,
-          name: "Igris",
-          rank: "Knight",
-          buff: { xp: 0.1 },
-          obtained: new Date().toISOString()
-        });
-      }
-      attempts--;
+    if (shadows.length >= shadowSlots) {
+      setAriseMessageType('error');
+      setAriseMessage('No empty shadow slots!');
+      return;
     }
-    if (obtainedShadows.length > 0) {
-      setShadows(prev => [...prev, ...obtainedShadows]);
-      setAriseCount(0);
-      setAriseMessageType('success');
-      setAriseMessage(`✨ ${obtainedShadows.length} shadow${obtainedShadows.length > 1 ? 's have' : ' has'} answered your call! ✨`);
+    let newShadows = [...shadows];
+    let shadowData = null;
+    let tries = 0;
+    while (tries < 10 && !shadowData) { // Try up to 10 times to get a non-duplicate
+      if (Math.random() < 0.5) {
+        const candidate = getRandomShadowFromPool();
+        if (!newShadows.some(s => s.key === candidate.key)) {
+          shadowData = {
+            ...candidate,
+            id: Date.now(),
+            level: 1,
+            obtained: new Date().toISOString(),
+          };
+        }
+      }
+      tries++;
+    }
+    if (shadowData) {
+      setUnboxShadow(shadowData);
+      setShadows(prev => [...prev, shadowData]);
+      setAriseCount(prev => prev - 1);
     } else {
       setAriseMessageType('error');
-      setAriseMessage("The Gate remains closed... Try again, Hunter!");
-      setAriseCount(0);
+      setAriseMessage('The Gate remains closed... Try again, Hunter!');
+      setAriseCount(prev => prev - 1);
     }
   };
 
@@ -359,7 +448,30 @@ useEffect(() => {
 
   // Timer Controls
   const startTimer = (type) => {
-    if (!activeTimer) setActiveTimer(type);
+    if (activeTimer === type) {
+      // Log the time and stop the timer
+      setDailyTimers(prev => ({
+        ...prev,
+        [activeTimer]: prev[activeTimer] + currentTime
+      }));
+      if (activeTimer === 'study') {
+        updateQuestProgress(1, currentTime);
+        const today = new Date().toISOString().split('T')[0];
+        setHeatmapData(prev =>
+          prev.map(item =>
+            item.date === today
+              ? { ...item, studyTime: item.studyTime + currentTime }
+              : item
+          )
+        );
+        updateLevel(currentTime);
+      }
+      setCurrentTime(0);
+      setActiveTimer(null);
+      return;
+    }
+    // Switch to new activity, keep timer running from currentTime
+    setActiveTimer(type);
   };
 
   const stopTimer = () => {
@@ -397,7 +509,12 @@ useEffect(() => {
 
   // Progression System
   const updateLevel = (studySeconds) => {
-    const xpBonus = shadows.reduce((sum, shadow) => sum + shadow.buff.xp, 0);
+    // Calculate total XP buff from all shadows (base + per level)
+    const xpBonus = shadows.reduce((sum, s) => {
+      const base = s.baseBuffs?.xp || 0;
+      const perLvl = s.buffsPerLevel?.xp || 0;
+      return sum + base + perLvl * (s.level - 1);
+    }, 0);
     const totalXp = xp + studySeconds * (1 + xpBonus);
     setXp(totalXp);
   };
@@ -505,13 +622,7 @@ useEffect(() => {
 
   // Heatmap Functions
   const getHeatmapColor = (studySeconds) => {
-    const hours = studySeconds / 3600;
-    if (hours >= 5) return '#00f7ff';
-    if (hours >= 4) return '#00c4cc';
-    if (hours >= 3) return '#009199';
-    if (hours >= 2) return '#006266';
-    if (hours >= 1) return '#003333';
-    return '#001a1a';
+    return '#1a1a2b';
   };
 
   const renderHeatmap = () => {
@@ -527,15 +638,13 @@ useEffect(() => {
         const dateString = date.toISOString().split('T')[0];
         const dayData = heatmapData.find(d => d.date === dateString);
         const studyHours = Math.round((dayData?.studyTime || 0) / 3600);
-
         return (
           <div
             key={i + 1}
-            className="w-10 h-10 m-1 rounded-lg cursor-pointer transition-all flex items-center justify-center hover:brightness-110"
-            style={{ backgroundColor: getHeatmapColor(dayData?.studyTime || 0) }}
+            className="w-10 h-10 m-1 rounded-lg border border-[#00f7ff]/30 bg-[#1a1a2b] flex items-center justify-center transition-all duration-200 hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_12px_2px_rgba(0,247,255,0.10)]"
             title={`${dateString}\nStudied: ${studyHours} hour${studyHours !== 1 ? 's' : ''}`}
           >
-            <span className="text-white">{i + 1}</span>
+            <span className="text-white text-sm font-bold">{i + 1}</span>
           </div>
         );
       })
@@ -607,42 +716,38 @@ useEffect(() => {
           </button>
         </div>
       </div>
-
       <div className="space-y-4">
         {quests.map(quest => (
-          <div key={quest.id} className="bg-dungeon-primary/50 p-4 rounded-lg">
+          <div
+            key={quest.id}
+            className={`bg-dungeon-primary/50 p-4 rounded-lg flex flex-col gap-2 transition-all duration-200 border border-transparent hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]`}
+          >
             <div className="flex items-center gap-3 mb-2">
-              <div className={`p-2 rounded ${quest.completed ? 'bg-green-900/50' : 'bg-dungeon-secondary'}`}>
+              <button
+                className={`p-2 rounded-full border-2 flex items-center justify-center transition-all duration-200
+                  ${quest.completed ? 'bg-green-900/50 border-green-400 text-green-300 cursor-not-allowed' : 'bg-dungeon-secondary border-[#00f7ff]/40 text-[#00f7ff] hover:bg-[#00f7ff]/10 hover:border-[#00f7ff] hover:scale-110 cursor-pointer'}`}
+                disabled={quest.completed}
+                onClick={() => !quest.completed && updateQuestProgress(quest.id, quest.target - quest.progress)}
+                title={quest.completed ? 'Completed' : 'Mark as complete'}
+                style={{ minWidth: 40, minHeight: 40 }}
+              >
                 {quest.completed ? <Check size={20} /> : <Crosshair size={20} />}
-              </div>
+              </button>
               <div>
                 <h3 className="font-bold">{quest.title}</h3>
                 <p className="text-sm text-dungeon-text/70">{quest.description}</p>
               </div>
+              <div className="ml-auto flex items-center gap-2">
+                <span className="text-sm text-[#00f7ff] font-bold">{quest.progress}/{quest.target}</span>
+              </div>
             </div>
-            
             <div className="flex items-center gap-3">
               <div className="flex-1 bg-dungeon-primary h-2 rounded-full">
-                  <div 
-                    className="h-full bg-dungeon-accent rounded-full transition-all"
-                    style={{ width: `${(quest.progress / quest.target) * 100}%` }}
-                  />
-                </div>
-                <div className="flex gap-2 items-center">
-                
-                {!quest.completed && (
-                  <button
-                    onClick={() => updateQuestProgress(quest.id, quest.target - quest.progress)}
-                    className="p-1 bg-dungeon-accent/20 hover:bg-dungeon-accent/40 rounded"
-                  >
-                    <Check size={16} />
-                  </button>
-                )}
+                <div
+                  className="h-full bg-dungeon-accent rounded-full transition-all"
+                  style={{ width: `${(quest.progress / quest.target) * 100}%` }}
+                />
               </div>
-
-              <span className="text-sm">
-                {quest.progress}/{quest.target}
-              </span>
             </div>
           </div>
         ))}
@@ -650,11 +755,46 @@ useEffect(() => {
     </div>
   );
 
+  // --- Shadow Odds Tooltip ---
+  const shadowOdds = [
+    { name: 'Beru', rarity: 'Legendary', percent: 1 },
+    { name: 'Tusk', rarity: 'Epic', percent: 2 },
+    { name: 'Kaisel', rarity: 'Epic', percent: 2 },
+    { name: 'Igris', rarity: 'Rare', percent: 4 },
+    { name: 'Iron', rarity: 'Rare', percent: 4 },
+    { name: 'Fangs', rarity: 'Uncommon', percent: 7 },
+  ];
+  const getShadowOddsTooltip = () => (
+    <div className="bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-50 min-w-[220px] text-center animate-fade-in">
+      <div className="text-[#00f7ff] font-bold mb-2">Shadow Summon Odds</div>
+      {shadowOdds.map((s, i) => (
+        <div key={i} className="flex items-center justify-between text-sm mb-1">
+          <span className="font-bold" style={{ color: RARITY_COLORS[s.rarity] }}>{s.name}</span>
+          <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: RARITY_COLORS[s.rarity], color: '#0a0a1a' }}>{s.rarity}</span>
+          <span className="ml-2 text-[#b8eaff]">{s.percent}%</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  // --- Update ShadowInventory UI: add odds tooltip icon ---
+  const [showOdds, setShowOdds] = useState(false);
   const ShadowInventory = ({ shadows, shadowSlots, currency, purchaseShadowSlot }) => (
     <div className="bg-system-secondary p-6 rounded-xl border border-system-accent/30">
       <div className="flex items-center gap-3 mb-6">
         <Skull className="text-system-accent" size={28} />
-        <h2 className="text-2xl font-bold glow">SHADOW ARMY</h2>
+        <h2 className="text-2xl font-bold glow flex items-center gap-2">SHADOW ARMY
+          <span
+            className="ml-2 cursor-pointer relative"
+            onMouseEnter={() => setShowOdds(true)}
+            onMouseLeave={() => setShowOdds(false)}
+          >
+            <span className="inline-block w-5 h-5 rounded-full bg-[#00f7ff]/20 border border-[#00f7ff] flex items-center justify-center text-[#00f7ff] font-bold text-xs">?</span>
+            {showOdds && (
+              <span className="absolute left-1/2 top-full mt-2 -translate-x-1/2 z-50">{getShadowOddsTooltip()}</span>
+            )}
+          </span>
+        </h2>
         <div className="ml-auto flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Coins size={20} />
@@ -662,40 +802,86 @@ useEffect(() => {
           </div>
         </div>
       </div>
-
       <div className="grid grid-cols-3 gap-4 mb-4">
         {[...Array(shadowSlots)].map((_, i) => (
-          <div 
-            key={i} 
-            className="aspect-square bg-[#0a0a1a] rounded-lg flex items-center justify-center relative group"
-            onMouseEnter={() => setHoveredShadow(i)}
-            onMouseLeave={() => setHoveredShadow(null)}
+          <div
+            key={i}
+            className={`bg-[#1a1a2b] text-[#00f7ff] rounded-lg p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center border border-transparent ${activeTimer === i ? 'bg-[#083A48] border-2 border-[#00f7ff] shadow-[0_0_32px_8px_rgba(0,247,255,0.35)] scale-105' : 'hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]'}`}
+            onClick={() => startTimer(i)}
+            onMouseEnter={() => setHoveredBlock(i)}
+            onMouseLeave={() => setHoveredBlock(null)}
+            style={{ minHeight: 140, minWidth: 0 }}
           >
             {shadows[i] ? (
               <>
-                <Ghost size={24} className="text-[#00f7ff] mb-1" />
-                <p className="text-sm">{shadows[i].name}</p>
-                {/* Buff tooltip */}
-                {hoveredShadow === i && (
-                  <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[180px] text-center animate-fade-in">
-                    <div className="text-[#00f7ff] font-bold mb-1">Buffs</div>
-                    <div className="text-[#b8eaff] text-sm">+{Math.round(shadows[i].buff.xp * 100)}% XP Gain</div>
-              </div>
-            )}
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-[#00f7ff]/30">
-              <div 
-                    className="h-full bg-[#00f7ff]"
-                style={{ width: `${((i + 1) / shadowSlots) * 100}%` }}
-              />
-            </div>
+                {/* Remove button, visible on hover */}
+                <button
+                  className="absolute top-2 right-2 z-10 p-1 rounded-full bg-[#1a1a2b] border border-[#00f7ff]/40 text-[#00f7ff] opacity-0 group-hover:opacity-100 transition-all hover:bg-[#ff4650] hover:text-white hover:border-[#ff4650]"
+                  style={{ boxShadow: '0 0 8px 2px #00f7ff22' }}
+                  title="Remove Shadow"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeShadow(i);
+                  }}
+                >
+                  <X size={16} />
+                </button>
+                <Ghost size={36} className="text-[#00f7ff] group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" />
+                {hoveredBlock === i && (
+                  <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[220px] text-center animate-fade-in">
+                    <div className="text-2xl font-bold mb-1 tracking-wider" style={{ color: RARITY_COLORS[shadows[i].rarity] }}>{shadows[i].name}</div>
+                    <div className="mb-1 px-2 py-0.5 rounded-full text-xs font-bold inline-block" style={{ background: RARITY_COLORS[shadows[i].rarity], color: '#0a0a1a' }}>{shadows[i].rarity}</div>
+                    <div className="text-[#b8eaff] text-sm mb-1">{shadows[i].rank} &bull; Lv. {shadows[i].level}</div>
+                    <div className="flex flex-col gap-1 mb-1">
+                      {Object.entries(shadows[i].baseBuffs).map(([buff, val]) => (
+                        <div key={buff} className="flex items-center gap-2 text-xs">
+                          <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                            {Math.round((val + (shadows[i].buffsPerLevel?.[buff] || 0) * (shadows[i].level - 1)) * 100)}%
+                          </span>
+                          <span className="text-[#b8eaff]" title={
+                            buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                            buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                            buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                            buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                            buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                            buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                            ''
+                          }>
+                            {buff === 'xp' ? 'XP Gain' :
+                             buff === 'studyEff' ? 'Study Efficiency' :
+                             buff === 'coins' ? 'Bonus Coins' :
+                             buff === 'idle' ? 'Idle→XP' :
+                             buff === 'play' ? 'Play→XP' :
+                             buff === 'quest' ? 'Quest Speed' :
+                             buff}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-[#b8eaff] italic mb-1 text-center">{shadows[i].description}</div>
+                    <div className="flex items-center gap-2 justify-center mt-2">
+                      <span className="text-sm font-bold">Lv. {shadows[i].level}</span>
+                      <button
+                        className={`ml-2 px-2 py-1 rounded bg-[#00f7ff] text-[#0a0a1a] text-xs font-bold shadow hover:bg-[#00e6e6] transition ${shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          levelUpShadow(i);
+                        }}
+                        title={shadows[i].level >= MAX_SHADOW_LEVEL ? 'Max Level' : currency < LEVEL_UP_COST(shadows[i].level) ? 'Not enough coins' : `Level Up (${LEVEL_UP_COST(shadows[i].level)} coins)`}
+                      >
+                        Level Up
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
-              <Ghost className="text-[#00f7ff]/30" size={24} />
+              <Ghost className="text-[#00f7ff]/30 group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" size={36} />
             )}
           </div>
         ))}
       </div>
-
       <button
         onClick={purchaseShadowSlot}
         className="w-full bg-dungeon-accent/90 hover:bg-dungeon-accent p-2 rounded-lg flex items-center justify-center gap-2"
@@ -920,6 +1106,92 @@ useEffect(() => {
   // Add state for hovered shadow index
   const [hoveredShadow, setHoveredShadow] = useState(null);
 
+  // --- Shadow Level Up ---
+  const levelUpShadow = idx => {
+    setShadows(prev => prev.map((s, i) => {
+      if (i !== idx) return s;
+      if (s.level >= MAX_SHADOW_LEVEL) return s;
+      if (currency < LEVEL_UP_COST(s.level)) return s;
+      setCurrency(c => c - LEVEL_UP_COST(s.level));
+      setAriseMessageType('success');
+      setAriseMessage(`${s.name} leveled up! Now Level ${s.level + 1}`);
+      return { ...s, level: s.level + 1 };
+    }));
+  };
+
+  // --- Calculate total buffs (with caps) ---
+  const getTotalBuffs = () => {
+    const total = { xp: 0, studyEff: 0, coins: 0, idle: 0, play: 0, quest: 0 };
+    for (const s of shadows) {
+      for (const k in total) {
+        const base = s.baseBuffs?.[k] || 0;
+        const perLvl = s.buffsPerLevel?.[k] || 0;
+        total[k] += base + perLvl * (s.level - 1);
+      }
+    }
+    for (const k in total) total[k] = Math.min(total[k], BUFF_CAPS[k]);
+    return total;
+  };
+
+  // --- Unboxing Modal UI ---
+  const UnboxModal = ({ shadow, onClose }) => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 animate-fade-in">
+      <div className="relative w-full max-w-xs mx-auto rounded-2xl border-4 border-[#00f7ff] bg-[#0a0a1a] shadow-2xl p-0 overflow-hidden animate-pulse" style={{ boxShadow: '0 0 60px #00f7ff88' }}>
+        <div className="flex flex-col items-center p-8 animate-fade-in">
+          <div className="mb-4 animate-bounce">
+            <Ghost size={48} className="text-[#00f7ff] drop-shadow-glow" />
+          </div>
+          <div className="text-2xl font-bold mb-2 tracking-wider" style={{ color: RARITY_COLORS[shadow.rarity] }}>{shadow.name}</div>
+          <div className="mb-2 px-3 py-1 rounded-full text-xs font-bold" style={{ background: RARITY_COLORS[shadow.rarity], color: '#0a0a1a' }}>{shadow.rarity}</div>
+          <div className="text-[#b8eaff] text-sm mb-2">{shadow.rank}</div>
+          <div className="flex flex-col gap-1 mb-2">
+            {Object.entries(shadow.baseBuffs).map(([buff, val]) => (
+              <div key={buff} className="flex items-center gap-2 text-xs">
+                <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                  {Math.round(val * 100)}%
+                </span>
+                <span className="text-[#b8eaff]" title={
+                  buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                  buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                  buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                  buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                  buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                  buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                  ''
+                }>
+                  {buff === 'xp' ? 'XP Gain' :
+                   buff === 'studyEff' ? 'Study Efficiency' :
+                   buff === 'coins' ? 'Bonus Coins' :
+                   buff === 'idle' ? 'Idle→XP' :
+                   buff === 'play' ? 'Play→XP' :
+                   buff === 'quest' ? 'Quest Speed' :
+                   buff}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-[#b8eaff] italic mb-4 text-center">{shadow.description}</div>
+          <button
+            onClick={onClose}
+            className="px-6 py-2 rounded bg-[#00f7ff] text-[#0a0a1a] font-bold text-lg shadow hover:bg-[#00e6e6] transition mt-2"
+          >
+            Continue
+          </button>
+        </div>
+        <div className="absolute inset-0 pointer-events-none">
+          <svg width="100%" height="100%" className="absolute inset-0 w-full h-full">
+            <rect x="8" y="8" width="calc(100% - 16px)" height="calc(100% - 16px)" rx="24" fill="none" stroke="#00f7ff" strokeWidth="2" opacity="0.5" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- Remove shadow function ---
+  const removeShadow = idx => {
+    setShadows(prev => prev.filter((_, i) => i !== idx));
+  };
+
   return (
     <div className="min-h-screen bg-[#0a0a1a] p-6 max-w-6xl mx-auto font-mono text-[#00f7ff]">
       {/* Header Section */}
@@ -989,14 +1261,7 @@ useEffect(() => {
             {['study', 'play', 'idle'].map((type) => (
               <div
                 key={type}
-                className={
-                  'rounded-lg p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center border ' +
-                  (activeTimer === type
-                    ? 'bg-[#00f7ff]/20 text-[#00f7ff] shadow-[0_0_32px_6px_rgba(0,247,255,0.35)] border-[#00f7ff]'
-                    : hoveredBlock === type
-                      ? 'bg-[#193a4d]/40 text-[#00f7ff] shadow-[0_0_12px_2px_rgba(0,247,255,0.10)] border-[#00f7ff]'
-                      : 'bg-[#1a1a2b] text-[#00f7ff] hover:bg-[#193a4d]/40 border-[#00f7ff]/20')
-                }
+                className={`bg-[#1a1a2b] text-[#00f7ff] rounded-lg p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center border border-transparent ${activeTimer === type ? 'bg-[#083A48] border-2 border-[#00f7ff] shadow-[0_0_32px_8px_rgba(0,247,255,0.35)] scale-105' : 'hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]'}`}
                 onClick={() => startTimer(type)}
                 onMouseEnter={() => setHoveredBlock(type)}
                 onMouseLeave={() => setHoveredBlock(null)}
@@ -1142,30 +1407,36 @@ useEffect(() => {
             </div>
             <div className="space-y-4">
               {dailyQuests.map(quest => (
-                <div key={quest.id} className="p-4 bg-[#0a0a1a] rounded-lg">
+                <div
+                  key={quest.id}
+                  className={`bg-dungeon-primary/50 p-4 rounded-lg flex flex-col gap-2 transition-all duration-200 border border-transparent hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]`}
+                >
                   <div className="flex items-center gap-3 mb-2">
-                    <div className={`p-1 rounded ${quest.completed ? 'bg-[#00f7ff]/20' : 'bg-[#00f7ff]/10'}`}>
-                      {quest.completed ? <Check size={16} /> : <Crosshair size={16} />}
-                    </div>
+                    <button
+                      className={`p-2 rounded-full border-2 flex items-center justify-center transition-all duration-200
+                        ${quest.completed ? 'bg-green-900/50 border-green-400 text-green-300 cursor-not-allowed' : 'bg-dungeon-secondary border-[#00f7ff]/40 text-[#00f7ff] hover:bg-[#00f7ff]/10 hover:border-[#00f7ff] hover:scale-110 cursor-pointer'}`}
+                      disabled={quest.completed}
+                      onClick={() => !quest.completed && updateQuestProgress(quest.id, quest.target - quest.progress)}
+                      title={quest.completed ? 'Completed' : 'Mark as complete'}
+                      style={{ minWidth: 40, minHeight: 40 }}
+                    >
+                      {quest.completed ? <Check size={20} /> : <Crosshair size={20} />}
+                    </button>
                     <div>
                       <h3 className="font-bold">{quest.title}</h3>
-                      <p className="text-sm text-[#00f7ff]/70">{quest.description}</p>
+                      <p className="text-sm text-dungeon-text/70">{quest.description}</p>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-sm text-[#00f7ff] font-bold">{quest.progress}/{quest.target}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="flex-1 bg-[#00f7ff]/10 h-2 rounded-full">
-                      <div 
-                        className="h-full bg-[#00f7ff] rounded-full"
+                    <div className="flex-1 bg-dungeon-primary h-2 rounded-full">
+                      <div
+                        className="h-full bg-dungeon-accent rounded-full transition-all"
                         style={{ width: `${(quest.progress / quest.target) * 100}%` }}
                       />
                     </div>
-                    <button
-                      onClick={() => updateQuestProgress(quest.id, quest.target - quest.progress)}
-                      className="system-icon-button"
-                    >
-                      <Check size={16} />
-                    </button>
-                    <span className="text-sm">{quest.progress}/{quest.target}</span>
                   </div>
                 </div>
               ))}
@@ -1189,30 +1460,76 @@ useEffect(() => {
               {[...Array(shadowSlots)].map((_, i) => (
                 <div 
                   key={i} 
-                  className="aspect-square bg-[#0a0a1a] rounded-lg flex items-center justify-center relative group"
+                  className="aspect-square bg-[#1a1a2b] rounded-lg flex items-center justify-center relative group"
                   onMouseEnter={() => setHoveredShadow(i)}
                   onMouseLeave={() => setHoveredShadow(null)}
                 >
                   {shadows[i] ? (
                     <>
-                      <Ghost size={24} className="text-[#00f7ff] mb-1" />
-                      <p className="text-sm">{shadows[i].name}</p>
-                      {/* Buff tooltip */}
+                      {/* Remove button, visible on hover */}
+                      <button
+                        className="absolute top-2 right-2 z-10 p-1 rounded-full bg-[#1a1a2b] border border-[#00f7ff]/40 text-[#00f7ff] opacity-0 group-hover:opacity-100 transition-all hover:bg-[#ff4650] hover:text-white hover:border-[#ff4650]"
+                        style={{ boxShadow: '0 0 8px 2px #00f7ff22' }}
+                        title="Remove Shadow"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeShadow(i);
+                        }}
+                      >
+                        <X size={16} />
+                      </button>
+                      <Ghost size={36} className="text-[#00f7ff] group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" />
                       {hoveredShadow === i && (
-                        <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[180px] text-center animate-fade-in">
-                          <div className="text-[#00f7ff] font-bold mb-1">Buffs</div>
-                          <div className="text-[#b8eaff] text-sm">+{Math.round(shadows[i].buff.xp * 100)}% XP Gain</div>
+                        <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[220px] text-center animate-fade-in">
+                          <div className="text-2xl font-bold mb-1 tracking-wider" style={{ color: RARITY_COLORS[shadows[i].rarity] }}>{shadows[i].name}</div>
+                          <div className="mb-1 px-2 py-0.5 rounded-full text-xs font-bold inline-block" style={{ background: RARITY_COLORS[shadows[i].rarity], color: '#0a0a1a' }}>{shadows[i].rarity}</div>
+                          <div className="text-[#b8eaff] text-sm mb-1">{shadows[i].rank} &bull; Lv. {shadows[i].level}</div>
+                          <div className="flex flex-col gap-1 mb-1">
+                            {Object.entries(shadows[i].baseBuffs).map(([buff, val]) => (
+                              <div key={buff} className="flex items-center gap-2 text-xs">
+                                <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                                  {Math.round((val + (shadows[i].buffsPerLevel?.[buff] || 0) * (shadows[i].level - 1)) * 100)}%
+                                </span>
+                                <span className="text-[#b8eaff]" title={
+                                  buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                                  buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                                  buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                                  buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                                  buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                                  buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                                  ''
+                                }>
+                                  {buff === 'xp' ? 'XP Gain' :
+                                   buff === 'studyEff' ? 'Study Efficiency' :
+                                   buff === 'coins' ? 'Bonus Coins' :
+                                   buff === 'idle' ? 'Idle→XP' :
+                                   buff === 'play' ? 'Play→XP' :
+                                   buff === 'quest' ? 'Quest Speed' :
+                                   buff}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="text-xs text-[#b8eaff] italic mb-1 text-center">{shadows[i].description}</div>
+                          <div className="flex items-center gap-2 justify-center mt-2">
+                            <span className="text-sm font-bold">Lv. {shadows[i].level}</span>
+                            <button
+                              className={`ml-2 px-2 py-1 rounded bg-[#00f7ff] text-[#0a0a1a] text-xs font-bold shadow hover:bg-[#00e6e6] transition ${shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              disabled={shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                levelUpShadow(i);
+                              }}
+                              title={shadows[i].level >= MAX_SHADOW_LEVEL ? 'Max Level' : currency < LEVEL_UP_COST(shadows[i].level) ? 'Not enough coins' : `Level Up (${LEVEL_UP_COST(shadows[i].level)} coins)`}
+                            >
+                              Level Up
+                            </button>
+                          </div>
                         </div>
                       )}
-                      <div className="absolute bottom-0 left-0 right-0 h-1 bg-[#00f7ff]/30">
-                        <div 
-                          className="h-full bg-[#00f7ff]" 
-                          style={{ width: `${((i + 1) / shadowSlots) * 100}%` }}
-                        />
-                      </div>
                     </>
                   ) : (
-                    <Ghost className="text-[#00f7ff]/30" size={24} />
+                    <Ghost className="text-[#00f7ff]/30 group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" size={36} />
                   )}
                 </div>
               ))}
@@ -1239,6 +1556,7 @@ useEffect(() => {
           onClose={() => setNotification(null)}
         />
       )}
+      {unboxShadow && <UnboxModal shadow={unboxShadow} onClose={() => setUnboxShadow(null)} />}
     </div>
   );
 };
