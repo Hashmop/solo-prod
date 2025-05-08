@@ -4,7 +4,7 @@ import {
   ChevronRight, PlusCircle, Trash2, Edit, Check, User, X, Camera, Trophy, Star,
   Music, Skull, Gem, Coins, ScrollText, Ghost, Crosshair, Play, PlayCircle, Moon, Plus, VolumeX, Volume2, DollarSign, ArrowUpCircle, ExclamationMarkIcon
 } from 'lucide-react';
-import MusicPlayer from './MusicPlayer';
+import MusicPlayer from './MusicPlayer.jsx';
 
 const ProductivityTracker = () => {
   // Shadow System
