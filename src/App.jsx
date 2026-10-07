@@ -1,775 +1,1564 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Activity,
-  ArrowRight,
-  Award,
-  BookOpen,
-  CalendarDays,
-  Check,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Circle,
-  Clock3,
-  Coins,
-  Flame,
-  LayoutDashboard,
-  ListChecks,
-  Menu,
-  Music2,
-  Pause,
-  Play,
-  Plus,
-  RotateCcw,
-  Shield,
-  Sparkles,
-  Target,
-  Trash2,
-  Trophy,
-  UserRound,
-  X,
-  Zap,
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Clock, BookOpen, Gamepad, Pause, RefreshCw, ChevronLeft, 
+  ChevronRight, PlusCircle, Trash2, Edit, Check, User, X, Camera, Trophy, Star,
+  Music, Skull, Gem, Coins, ScrollText, Ghost, Crosshair, Play, PlayCircle, Moon, Plus, VolumeX, Volume2, DollarSign, ArrowUpCircle, ExclamationMarkIcon
 } from 'lucide-react';
+import MusicPlayer from './MusicPlayer.jsx';
 
-const STORAGE_KEY = 'solo-prod-system-v3';
-const LEGACY_TODOS_KEY = 'productivityTodos';
-const FOCUS_PRESETS = [15, 25, 50];
-const MODES = {
-  focus: { label: 'Focus', seconds: 25 * 60 },
-  shortBreak: { label: 'Short break', seconds: 5 * 60 },
-};
-
-const localDateKey = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const dateFromKey = (key) => {
-  const [year, month, day] = key.split('-').map(Number);
-  return new Date(year, month - 1, day);
-};
-
-const addDays = (date, amount) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + amount);
-  return next;
-};
-
-const readJson = (key, fallback) => {
-  try {
-    const value = window.localStorage.getItem(key);
-    return value ? JSON.parse(value) : fallback;
-  } catch {
-    return fallback;
-  }
-};
-
-function makeInitialData() {
-  const today = localDateKey(new Date());
-  const saved = readJson(STORAGE_KEY, null);
-  if (saved && typeof saved === 'object' && saved.logs && Array.isArray(saved.tasks)) {
-    return {
-      username: 'Player',
-      xp: 0,
-      coins: 0,
-      tasks: [],
-      logs: {},
-      session: null,
-      ...saved,
-    };
-  }
-
-  // Bring forward the useful parts of the original app's local-only profile.
-  const oldHeatmap = readJson('productivityHeatmap', []);
-  const logs = {};
-  if (Array.isArray(oldHeatmap)) {
-    oldHeatmap.forEach((entry) => {
-      if (entry?.date) {
-        logs[entry.date] = {
-          studySeconds: Math.max(0, Number(entry.studyTime) || 0),
-          completedSessions: 0,
-          claimedQuests: [],
-        };
-      }
-    });
-  }
-  const oldDaily = readJson('productivityDailyTimers', {});
-  const oldResetDate = window.localStorage.getItem('lastResetDate');
-  const dailyRecordIsCurrent = !oldResetDate || localDateKey(new Date(oldResetDate)) === today;
-  if (dailyRecordIsCurrent && Number(oldDaily.study) > 0) {
-    logs[today] = {
-      studySeconds: Math.max(logs[today]?.studySeconds || 0, Number(oldDaily.study)),
-      completedSessions: logs[today]?.completedSessions || 0,
-      claimedQuests: [],
-    };
-  }
-  const oldTodos = readJson(LEGACY_TODOS_KEY, []);
-  const tasks = Array.isArray(oldTodos)
-    ? oldTodos.map((task, index) => {
-        const done = Boolean(task?.completed ?? task?.done);
-        return {
-          id: String(task?.id ?? `legacy-${index}`),
-          title: String(task?.title ?? task?.text ?? task?.name ?? '').trim(),
-          done,
-          rewarded: done,
-          completedDate: done ? today : null,
-          createdAt: task?.createdAt ?? new Date().toISOString(),
-        };
-      }).filter((task) => task.title)
-    : [];
-
-  return {
-    username: window.localStorage.getItem('productivityUsername') || 'Player',
-    xp: Math.max(0, Number(window.localStorage.getItem('productivityXp')) || 0),
-    coins: Math.max(0, Number(window.localStorage.getItem('systemCurrency')) || 0),
-    tasks,
-    logs,
-    session: null,
-  };
-}
-
-function getPlayerLevel(totalXp) {
-  let level = 1;
-  let remaining = Math.max(0, Number(totalXp) || 0);
-  let needed = 100;
-  while (remaining >= needed) {
-    remaining -= needed;
-    level += 1;
-    needed = 100 + (level - 1) * 50;
-  }
-  return { level, currentXp: remaining, nextLevelXp: needed };
-}
-
-function rankForLevel(level) {
-  if (level >= 30) return 'S';
-  if (level >= 20) return 'A';
-  if (level >= 12) return 'B';
-  if (level >= 7) return 'C';
-  if (level >= 4) return 'D';
-  return 'E';
-}
-
-function getStreak(logs, today) {
-  let cursor = dateFromKey(today);
-  if (!(logs[today]?.studySeconds > 0)) cursor = addDays(cursor, -1);
-  let streak = 0;
-  while ((logs[localDateKey(cursor)]?.studySeconds || 0) > 0) {
-    streak += 1;
-    cursor = addDays(cursor, -1);
-  }
-  return streak;
-}
-
-function formatDuration(seconds) {
-  const value = Math.max(0, Math.ceil(seconds));
-  const minutes = Math.floor(value / 60);
-  const remainder = value % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
-}
-
-function App() {
-  const [data, setData] = useState(makeInitialData);
-  const [now, setNow] = useState(Date.now());
-  const [focusMinutes, setFocusMinutes] = useState(25);
-  const [selectedMode, setSelectedMode] = useState('focus');
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const date = new Date();
-    return new Date(date.getFullYear(), date.getMonth(), 1);
+const ProductivityTracker = () => {
+  // Shadow System
+  const [shadows, setShadows] = useState(() => {
+    const saved = localStorage.getItem('shadowArmy');
+    return saved ? JSON.parse(saved) : [];
   });
-  const [newTask, setNewTask] = useState('');
-  const [manualMinutes, setManualMinutes] = useState('');
-  const [showManualLog, setShowManualLog] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [nameDraft, setNameDraft] = useState(data.username);
-  const [toast, setToast] = useState('');
-  const [musicOn, setMusicOn] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const audioRef = useRef(null);
-  const toastTimer = useRef(null);
-  const completedSessionId = useRef(null);
+  const [ariseCount, setAriseCount] = useState(() => {
+    const saved = localStorage.getItem('ariseCount');
+    return saved ? parseInt(saved) : 0;
+  });
+  const [shadowSlots, setShadowSlots] = useState(() => {
+    const saved = localStorage.getItem('shadowSlots');
+    return saved ? parseInt(saved) : 1;
+  });
+  const [currency, setCurrency] = useState(() => {
+    const saved = localStorage.getItem('systemCurrency');
+    return saved ? parseInt(saved) : 1000;
+  });
 
-  const today = localDateKey(new Date());
-  const todaysLog = data.logs[today] || { studySeconds: 0, completedSessions: 0, claimedQuests: [] };
-  const todaySeconds = Number(todaysLog.studySeconds) || 0;
-  const completedTasksToday = data.tasks.filter((task) => task.done && task.completedDate === today).length;
-  const player = getPlayerLevel(data.xp);
-  const rank = rankForLevel(player.level);
-  const streak = getStreak(data.logs, today);
-  const timerMode = data.session?.mode || selectedMode;
-  const timerDuration = data.session?.durationSeconds ?? (
-    selectedMode === 'focus' ? focusMinutes * 60 : MODES.shortBreak.seconds
-  );
-  const secondsLeft = data.session
-    ? data.session.endsAt
-      ? Math.max(0, Math.ceil((data.session.endsAt - now) / 1000))
-      : Math.max(0, Number(data.session.remainingSeconds) || 0)
-    : timerDuration;
-  const timerProgress = timerDuration > 0 ? 1 - secondsLeft / timerDuration : 0;
-  const timerCircumference = 2 * Math.PI * 104;
-
-  const missions = useMemo(() => [
-    {
-      id: 'enter-gate',
-      title: 'Enter the Gate',
-      detail: 'Finish one focus session',
-      progress: Math.min(Number(todaysLog.completedSessions) || 0, 1),
-      goal: 1,
-      reward: 50,
-      icon: Target,
-      format: (value, goal) => `${value}/${goal} session`,
+  // Daily Quests
+  const [dailyQuests, setDailyQuests] = useState([
+    { 
+      id: 1,
+      title: "Dungeon Study Session",
+      description: "Study for 1 hour in the Abyss",
+      target: 3600,
+      progress: 0,
+      reward: { xp: 100, coins: 50 },
+      completed: false
     },
     {
-      id: 'deep-work',
-      title: 'Deep work',
-      detail: 'Reach 60 focused minutes',
-      progress: Math.min(todaySeconds, 60 * 60),
-      goal: 60 * 60,
-      reward: 100,
-      icon: BookOpen,
-      format: (value) => `${Math.floor(value / 60)} / 60 min`,
+      id: 2,
+      title: "Physical Training",
+      description: "Complete 20 pushups",
+      target: 20,
+      progress: 0,
+      reward: { xp: 50, coins: 25 },
+      completed: false
     },
     {
-      id: 'clear-missions',
-      title: 'Clear 3 missions',
-      detail: 'Complete three items on your list',
-      progress: Math.min(completedTasksToday, 3),
-      goal: 3,
-      reward: 75,
-      icon: ListChecks,
-      format: (value, goal) => `${value}/${goal} tasks`,
-    },
-  ], [completedTasksToday, todaySeconds, todaysLog.completedSessions]);
-
-  const calendarCells = useMemo(() => {
-    const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth();
-    const firstWeekday = new Date(year, month, 1).getDay();
-    const dayCount = new Date(year, month + 1, 0).getDate();
-    const cellCount = Math.ceil((firstWeekday + dayCount) / 7) * 7;
-    return Array.from({ length: cellCount }, (_, index) => {
-      const dayNumber = index - firstWeekday + 1;
-      if (dayNumber < 1 || dayNumber > dayCount) return null;
-      const date = new Date(year, month, dayNumber);
-      const key = localDateKey(date);
-      return { date, key, seconds: Number(data.logs[key]?.studySeconds) || 0, isToday: key === today, isFuture: key > today };
-    });
-  }, [calendarMonth, data.logs, today]);
-
-  const weekDays = useMemo(() => {
-    const current = dateFromKey(today);
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = addDays(current, index - 6);
-      const key = localDateKey(date);
-      return { date, key, seconds: Number(data.logs[key]?.studySeconds) || 0 };
-    });
-  }, [data.logs, today]);
-  const maxWeekMinutes = Math.max(60, ...weekDays.map((day) => day.seconds / 60));
-  const monthMinutes = calendarCells.reduce((sum, day) => sum + (day?.seconds || 0), 0) / 60;
-  const viewingCurrentMonth = calendarMonth.getFullYear() === new Date().getFullYear() && calendarMonth.getMonth() === new Date().getMonth();
-  const calendarMonthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(calendarMonth);
-  const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
-  const prettyName = data.username.trim() || 'Player';
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 500);
-    return () => window.clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const session = data.session;
-    if (!session?.endsAt || session.endsAt > now || completedSessionId.current === session.id) return;
-    completedSessionId.current = session.id;
-    setData((current) => {
-      if (current.session?.id !== session.id) return current;
-      const next = { ...current, session: null };
-      if (session.mode !== 'focus') return next;
-      const key = localDateKey(new Date());
-      const day = current.logs[key] || { studySeconds: 0, completedSessions: 0, claimedQuests: [] };
-      const seconds = Number(session.durationSeconds) || focusMinutes * 60;
-      const xpGain = Math.max(5, Math.round(seconds / 30));
-      return {
-        ...next,
-        xp: current.xp + xpGain,
-        coins: current.coins + 10,
-        logs: {
-          ...current.logs,
-          [key]: {
-            ...day,
-            studySeconds: (Number(day.studySeconds) || 0) + seconds,
-            completedSessions: (Number(day.completedSessions) || 0) + 1,
-            claimedQuests: day.claimedQuests || [],
-          },
-        },
-      };
-    });
-    notify(session.mode === 'focus' ? 'Focus session cleared · +XP added to your profile' : 'Break complete · ready for another round.');
-  }, [data.session, focusMinutes, now]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(''), 3000);
-    return () => window.clearTimeout(toastTimer.current);
-  }, [toast]);
-
-  useEffect(() => () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+      id: 3,
+      title: "Mana Replenishment",
+      description: "Drink 2 bottles of water",
+      target: 2,
+      progress: 0,
+      reward: { xp: 30, coins: 15 },
+      completed: false
     }
-  }, []);
+  ]);
 
-  function notify(message) {
-    setToast(message);
-  }
+  // Shadow Arise Mechanics
+  const SHADOW_POOL = [
+    {
+      key: 'iggris',
+      name: 'Igris',
+      rank: 'Knight',
+      rarity: 'Rare',
+      baseBuffs: { xp: 0.10 },
+      buffsPerLevel: { xp: 0.02 },
+      description: 'Loyal knight. Increases XP gain.'
+    },
+    {
+      key: 'beru',
+      name: 'Beru',
+      rank: 'Marshal',
+      rarity: 'Legendary',
+      baseBuffs: { xp: 0.15, studyEff: 0.05 },
+      buffsPerLevel: { xp: 0.03, studyEff: 0.01 },
+      description: 'Ant king. Boosts XP and study efficiency.'
+    },
+    {
+      key: 'tusk',
+      name: 'Tusk',
+      rank: 'Mage',
+      rarity: 'Epic',
+      baseBuffs: { xp: 0.10, coins: 0.10 },
+      buffsPerLevel: { xp: 0.02, coins: 0.02 },
+      description: 'Orc shaman. Grants XP and bonus coins.'
+    },
+    {
+      key: 'iron',
+      name: 'Iron',
+      rank: 'Tank',
+      rarity: 'Rare',
+      baseBuffs: { xp: 0.05, idle: 0.10 },
+      buffsPerLevel: { xp: 0.01, idle: 0.02 },
+      description: 'Steadfast knight. Turns idle time into XP.'
+    },
+    {
+      key: 'fangs',
+      name: 'Fangs',
+      rank: 'Assassin',
+      rarity: 'Uncommon',
+      baseBuffs: { xp: 0.07, play: 0.05 },
+      buffsPerLevel: { xp: 0.01, play: 0.01 },
+      description: 'Silent killer. Makes playtime productive.'
+    },
+    {
+      key: 'kaisel',
+      name: 'Kaisel',
+      rank: 'Mount',
+      rarity: 'Epic',
+      baseBuffs: { xp: 0.10, quest: 0.05 },
+      buffsPerLevel: { xp: 0.02, quest: 0.01 },
+      description: 'Flying wyvern. Helps finish tasks faster.'
+    },
+  ];
+  const RARITY_COLORS = {
+    Legendary: '#ffd700',
+    Epic: '#a259ff',
+    Rare: '#00f7ff',
+    Uncommon: '#4ade80',
+  };
+  const MAX_SHADOW_LEVEL = 10;
+  const LEVEL_UP_COST = lvl => 200 + lvl * 100;
+  const BUFF_CAPS = { xp: 1.0, studyEff: 0.5, coins: 1.0, idle: 0.5, play: 0.5, quest: 0.5 };
 
-  function startTimer() {
-    const seconds = data.session?.remainingSeconds || timerDuration;
-    const mode = data.session?.mode || selectedMode;
-    const durationSeconds = data.session?.durationSeconds || timerDuration;
-    setData((current) => ({
-      ...current,
-      session: {
-        id: current.session?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        mode,
-        durationSeconds,
-        remainingSeconds: seconds,
-        endsAt: Date.now() + seconds * 1000,
-      },
-    }));
-  }
+  const getRandomShadowFromPool = () => {
+    // Weighted by rarity
+    const pool = [
+      ...Array(1).fill(SHADOW_POOL[1]), // Beru (Legendary)
+      ...Array(2).fill(SHADOW_POOL[2]), // Tusk (Epic)
+      ...Array(2).fill(SHADOW_POOL[5]), // Kaisel (Epic)
+      ...Array(4).fill(SHADOW_POOL[0]), // Igris (Rare)
+      ...Array(4).fill(SHADOW_POOL[3]), // Iron (Rare)
+      ...Array(7).fill(SHADOW_POOL[4]), // Fangs (Uncommon)
+    ];
+    return pool[Math.floor(Math.random() * pool.length)];
+  };
 
-  function pauseTimer() {
-    if (!data.session?.endsAt) return;
-    const remainingSeconds = Math.max(0, Math.ceil((data.session.endsAt - Date.now()) / 1000));
-    setData((current) => ({
-      ...current,
-      session: current.session ? { ...current.session, endsAt: null, remainingSeconds } : null,
-    }));
-  }
+  // --- Unboxing Modal State ---
+  const [unboxShadow, setUnboxShadow] = useState(null);
 
-  function resetTimer() {
-    setData((current) => ({ ...current, session: null }));
-    setNow(Date.now());
-  }
-
-  function chooseMode(mode) {
-    if (data.session?.endsAt) return;
-    setData((current) => ({ ...current, session: null }));
-    setSelectedMode(mode);
-  }
-
-  function logFocusMinutes(minutesValue) {
-    const minutes = Math.min(240, Math.floor(Number(minutesValue)));
-    if (!Number.isFinite(minutes) || minutes < 1) {
-      notify('Enter a focus time from 1 to 240 minutes.');
+  // --- Update arise logic: one by one ---
+  const attemptArise = () => {
+    if (ariseCount === 0) {
+      setAriseMessageType('error');
+      setAriseMessage('You need to complete a Daily Gate to Arise a Shadow!');
       return;
     }
-    const seconds = minutes * 60;
-    const xpGain = Math.max(2, Math.round(minutes * 2));
-    const key = localDateKey(new Date());
-    setData((current) => {
-      const day = current.logs[key] || { studySeconds: 0, completedSessions: 0, claimedQuests: [] };
-      return {
-        ...current,
-        xp: current.xp + xpGain,
-        coins: current.coins + Math.max(2, Math.floor(minutes / 10)),
-        logs: {
-          ...current.logs,
-          [key]: {
-            ...day,
-            studySeconds: (Number(day.studySeconds) || 0) + seconds,
-            completedSessions: (Number(day.completedSessions) || 0) + 1,
-            claimedQuests: day.claimedQuests || [],
-          },
-        },
-      };
-    });
-    setManualMinutes('');
-    setShowManualLog(false);
-    notify(`Focus logged · +${xpGain} XP`);
-  }
-
-  function addTask(event) {
-    event.preventDefault();
-    const title = newTask.trim();
-    if (!title) return;
-    setData((current) => ({
-      ...current,
-      tasks: [{
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        title,
-        done: false,
-        rewarded: false,
-        completedDate: null,
-        createdAt: new Date().toISOString(),
-      }, ...current.tasks],
-    }));
-    setNewTask('');
-  }
-
-  function addSuggestedTask(title) {
-    setData((current) => ({
-      ...current,
-      tasks: [{
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        title,
-        done: false,
-        rewarded: false,
-        completedDate: null,
-        createdAt: new Date().toISOString(),
-      }, ...current.tasks],
-    }));
-  }
-
-  function toggleTask(id) {
-    const key = localDateKey(new Date());
-    setData((current) => {
-      const task = current.tasks.find((item) => item.id === id);
-      if (!task) return current;
-      const nowDone = !task.done;
-      const firstReward = nowDone && !task.rewarded;
-      return {
-        ...current,
-        xp: current.xp + (firstReward ? 15 : 0),
-        coins: current.coins + (firstReward ? 3 : 0),
-        tasks: current.tasks.map((item) => item.id === id
-          ? { ...item, done: nowDone, rewarded: item.rewarded || firstReward, completedDate: nowDone ? key : null }
-          : item),
-      };
-    });
-  }
-
-  function deleteTask(id) {
-    setData((current) => ({ ...current, tasks: current.tasks.filter((task) => task.id !== id) }));
-  }
-
-  function claimMission(mission) {
-    const key = localDateKey(new Date());
-    setData((current) => {
-      const day = current.logs[key] || { studySeconds: 0, completedSessions: 0, claimedQuests: [] };
-      if ((day.claimedQuests || []).includes(mission.id)) return current;
-      return {
-        ...current,
-        xp: current.xp + mission.reward,
-        coins: current.coins + Math.max(5, Math.round(mission.reward / 10)),
-        logs: {
-          ...current.logs,
-          [key]: { ...day, claimedQuests: [...(day.claimedQuests || []), mission.id] },
-        },
-      };
-    });
-    notify(`Mission reward claimed · +${mission.reward} XP`);
-  }
-
-  function saveName(event) {
-    event.preventDefault();
-    const username = nameDraft.trim().slice(0, 24) || 'Player';
-    setData((current) => ({ ...current, username }));
-    setProfileOpen(false);
-    notify('Player profile updated.');
-  }
-
-  async function toggleMusic() {
-    if (!audioRef.current) {
-      audioRef.current = new Audio('/music/soloLofi.mp3');
-      audioRef.current.loop = true;
-      audioRef.current.volume = 0.24;
+    if (shadows.length >= shadowSlots) {
+      setAriseMessageType('error');
+      setAriseMessage('No empty shadow slots!');
+      return;
     }
-    if (audioRef.current.paused) {
-      try {
-        await audioRef.current.play();
-        setMusicOn(true);
-      } catch {
-        notify('Audio could not start. Try pressing the button again.');
+    let newShadows = [...shadows];
+    let shadowData = null;
+    let tries = 0;
+    while (tries < 10 && !shadowData) { // Try up to 10 times to get a non-duplicate
+      if (Math.random() < 0.5) {
+        const candidate = getRandomShadowFromPool();
+        if (!newShadows.some(s => s.key === candidate.key)) {
+          shadowData = {
+            ...candidate,
+            id: Date.now(),
+            level: 1,
+            obtained: new Date().toISOString(),
+          };
+        }
       }
-    } else {
-      audioRef.current.pause();
-      setMusicOn(false);
+      tries++;
     }
-  }
+    if (shadowData) {
+      setUnboxShadow(shadowData);
+      setShadows(prev => [...prev, shadowData]);
+      setAriseCount(prev => prev - 1);
+    } else {
+      setAriseMessageType('error');
+      setAriseMessage('The Gate remains closed... Try again, Hunter!');
+      setAriseCount(prev => prev - 1);
+    }
+  };
 
-  function jumpTo(id) {
-    setMobileMenuOpen(false);
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  // Update quest progress
+  const updateQuestProgress = (questId, amount) => {
+    setDailyQuests(prev => prev.map(quest => {
+      if (quest.id === questId && !quest.completed) {
+        const newProgress = quest.progress + amount;
+        const completed = newProgress >= quest.target;
+        
+        if (completed) {
+          setAriseCount(prev => prev + 1);
+          setCurrency(prev => prev + quest.reward.coins);
+          setXp(prev => prev + quest.reward.xp);
+        }
 
-  const navItems = [
-    { label: 'Overview', target: 'overview', icon: LayoutDashboard },
-    { label: 'Focus room', target: 'focus-room', icon: Clock3 },
-    { label: 'Daily missions', target: 'missions', icon: Target },
-    { label: 'Task list', target: 'tasks', icon: ListChecks },
-    { label: 'Progress', target: 'progress', icon: Activity },
+        return {
+          ...quest,
+          progress: Math.min(newProgress, quest.target),
+          completed
+        };
+      }
+      return quest;
+    }));
+  };
+
+  // Shop System
+  const purchaseShadowSlot = () => {
+    const cost = 500 + (shadowSlots * 250);
+    if (currency >= cost) {
+      setCurrency(prev => prev - cost);
+      setShadowSlots(prev => prev + 1);
+    }
+  };
+
+  const [manualTime, setManualTime] = useState({
+    study: { minutes: '' },
+    play: { minutes: '' },
+    idle: { minutes: '' }
+  });
+  const handleManualInputChange = (type, field, value) => {
+    setManualTime(prev => ({
+      ...prev,
+      [type]: {
+        ...prev[type],
+        [field]: value
+      }
+    }));
+  };
+  
+  
+  // Update addManualTime to:
+  const addManualTime = (type) => {
+    const minutes = parseInt(manualTime[type].minutes) || 0;
+    if (minutes > 0) {
+      const totalSeconds = minutes * 60;
+      
+      setDailyTimers(prev => ({
+        ...prev,
+        [type]: prev[type] + totalSeconds
+      }));
+      
+      setTotalTimers(prev => ({
+        ...prev,
+        [type]: prev[type] + totalSeconds
+      }));
+      // for study quest
+      if (type === 'study') {
+        updateQuestProgress(1, totalSeconds); // Update quest ID 1 (Study quest)
+      }
+
+      if (type === 'study') {
+        const today = new Date().toISOString().split('T')[0];
+        setHeatmapData(prev => 
+          prev.map(item => 
+            item.date === today
+              ? { ...item, studyTime: item.studyTime + totalSeconds }
+              : item
+          )
+        );
+        updateLevel(totalSeconds);
+      }
+
+      setManualTime(prev => ({
+        ...prev,
+        [type]: { minutes: '' }
+      }));
+    }
+  };
+
+
+  // Timer States
+  const [dailyTimers, setDailyTimers] = useState(() => {
+    const saved = localStorage.getItem('productivityDailyTimers');
+    return saved ? JSON.parse(saved) : { study: 0, play: 0, idle: 0 };
+  });
+  
+  const [totalTimers, setTotalTimers] = useState(() => {
+    const saved = localStorage.getItem('productivityTotalTimers');
+    return saved ? JSON.parse(saved) : { study: 0, play: 0, idle: 0 };
+  });
+
+  const [activeTimer, setActiveTimer] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [lastResetDate, setLastResetDate] = useState(() => {
+    const saved = localStorage.getItem('lastResetDate');
+    return saved ? new Date(saved) : new Date();
+  });
+
+  // Progression System
+  const [level, setLevel] = useState(() => {
+    const saved = localStorage.getItem('productivityLevel');
+    return saved ? parseInt(saved) : 1;
+  });
+  
+  const [xp, setXp] = useState(() => {
+    const saved = localStorage.getItem('productivityXp');
+    return saved ? parseInt(saved) : 0;
+  });
+
+  // Heatmap State
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [heatmapData, setHeatmapData] = useState(() => {
+    const saved = localStorage.getItem('productivityHeatmap');
+    const parsedData = saved ? JSON.parse(saved) : [];
+    
+    // Get current month's data or initialize
+    const currentDate = new Date();
+    const currentYear = currentDate.getFullYear();
+    const currentMonth = currentDate.getMonth();
+    
+    return Array.from({ length: new Date(currentYear, currentMonth + 1, 0).getDate() }, (_, i) => {
+      const date = new Date(currentYear, currentMonth, i + 1);
+      const dateString = date.toISOString().split('T')[0];
+      const existing = parsedData.find(d => d.date === dateString);
+      return existing || { date: dateString, studyTime: 0 };
+    });
+  });
+
+  // Todo List State
+  const [todos, setTodos] = useState(() => {
+    const saved = localStorage.getItem('productivityTodos');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [newTodo, setNewTodo] = useState('');
+  const [editingTodoId, setEditingTodoId] = useState(null);
+
+  // Profile State
+  const [username, setUsername] = useState(() => {
+    return localStorage.getItem('productivityUsername') || 'Productivity Pro';
+  });
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isEditingUsername, setIsEditingUsername] = useState(false);
+  const [profilePicture, setProfilePicture] = useState(() => {
+    return localStorage.getItem('productivityProfilePic') || null;
+  });
+  //music
+  const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+
+  // --- NEW: For block hover/active effect ---
+  const [hoveredBlock, setHoveredBlock] = useState(null);
+
+  // --- NEW: Shadow slot cost ---
+  const shadowSlotCost = 500 + (shadowSlots * 250);
+
+  // Daily Reset Logic
+  useEffect(() => {
+    const checkDayChange = () => {
+      const now = new Date();
+      const lastReset = new Date(lastResetDate);
+      
+      if (now.toDateString() !== lastReset.toDateString()) {
+        setTotalTimers(prev => ({
+          study: prev.study + dailyTimers.study,
+          play: prev.play + dailyTimers.play,
+          idle: prev.idle + dailyTimers.idle,
+        }));
+        setDailyTimers({ study: 0, play: 0, idle: 0 });
+        setLastResetDate(new Date());
+      }
+    };
+
+    const interval = setInterval(checkDayChange, 60000);
+    return () => clearInterval(interval);
+  }, [lastResetDate, dailyTimers]);
+
+  // Active Timer Effect
+  useEffect(() => {
+    let timer;
+    if (activeTimer) {
+      timer = setInterval(() => {
+        setCurrentTime(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [activeTimer]);
+  // shadow and currency
+useEffect(() => localStorage.setItem('shadowArmy', JSON.stringify(shadows)), [shadows]);
+useEffect(() => localStorage.setItem('shadowSlots', shadowSlots), [shadowSlots]);
+useEffect(() => localStorage.setItem('systemCurrency', currency), [currency]);
+
+useEffect(() => {
+  const updateHeatmapData = () => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    setHeatmapData(prev => {
+      const newData = Array.from({ length: daysInMonth }, (_, i) => {
+        const date = new Date(year, month, i + 1);
+        const dateString = date.toISOString().split('T')[0];
+        const existing = prev.find(d => d.date === dateString) || 
+                         JSON.parse(localStorage.getItem('productivityHeatmap'))?.find(d => d.date === dateString) || 
+                         { date: dateString, studyTime: 0 };
+        return existing;
+      });
+      return newData;
+    });
+  };
+  
+  updateHeatmapData();
+}, [currentMonth]);
+
+  // Persistence Effects
+  useEffect(() => localStorage.setItem('productivityDailyTimers', JSON.stringify(dailyTimers)), [dailyTimers]);
+  useEffect(() => localStorage.setItem('productivityTotalTimers', JSON.stringify(totalTimers)), [totalTimers]);
+  useEffect(() => localStorage.setItem('lastResetDate', lastResetDate.toISOString()), [lastResetDate]);
+  useEffect(() => localStorage.setItem('productivityHeatmap', JSON.stringify(heatmapData)), [heatmapData]);
+  useEffect(() => localStorage.setItem('productivityTodos', JSON.stringify(todos)), [todos]);
+  useEffect(() => localStorage.setItem('productivityUsername', username), [username]);
+  useEffect(() => {
+    if (profilePicture) localStorage.setItem('productivityProfilePic', profilePicture);
+  }, [profilePicture]);
+  useEffect(() => {
+    localStorage.setItem('productivityLevel', level);
+    localStorage.setItem('productivityXp', xp);
+  }, [level, xp]);
+
+  // --- Level calculation: always derive from XP ---
+  useEffect(() => {
+    const newLevel = Math.floor(xp / 3600) + 1;
+    if (newLevel !== level) setLevel(newLevel);
+  }, [xp]);
+
+  // --- Persist ariseCount in localStorage ---
+  useEffect(() => {
+    localStorage.setItem('ariseCount', ariseCount);
+  }, [ariseCount]);
+
+  // Helper Functions
+  const formatTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+    
+    return [
+      hours > 0 ? `${hours}h` : null,
+      minutes > 0 ? `${minutes}m` : null,
+      `${remainingSeconds}s`
+    ].filter(Boolean).join(' ');
+  };
+
+  const calculateProductivity = (timers) => {
+    const { study, play } = timers;
+    const totalTime = study + play;
+    return totalTime > 0 ? Math.round((study / totalTime) * 100) : 0;
+  };
+
+  const calculateXpPercentage = () => ((xp % 3600) / 3600 * 100).toFixed(1);
+
+  // Timer Controls
+  const startTimer = (type) => {
+    if (activeTimer === type) {
+      // Log the time and stop the timer
+      setDailyTimers(prev => ({
+        ...prev,
+        [activeTimer]: prev[activeTimer] + currentTime
+      }));
+      if (activeTimer === 'study') {
+        updateQuestProgress(1, currentTime);
+        const today = new Date().toISOString().split('T')[0];
+        setHeatmapData(prev =>
+          prev.map(item =>
+            item.date === today
+              ? { ...item, studyTime: item.studyTime + currentTime }
+              : item
+          )
+        );
+        updateLevel(currentTime);
+      }
+      setCurrentTime(0);
+      setActiveTimer(null);
+      return;
+    }
+    // Switch to new activity, keep timer running from currentTime
+    setActiveTimer(type);
+  };
+
+  const stopTimer = () => {
+    if (activeTimer) {
+      setDailyTimers(prev => ({
+        ...prev,
+        [activeTimer]: prev[activeTimer] + currentTime
+      }));
+
+      if (activeTimer === 'study') {
+
+        // quest progress update
+        updateQuestProgress(1, currentTime); // Update study quest
+        
+        const today = new Date().toISOString().split('T')[0];
+        setHeatmapData(prev => 
+          prev.map(item => 
+            item.date === today
+              ? { ...item, studyTime: item.studyTime + currentTime }
+              : item
+          )
+        );
+        updateLevel(currentTime);
+      }
+      
+      setActiveTimer(null);
+      setCurrentTime(0);
+    }
+  };
+
+  const resetTimer = () => {
+    setActiveTimer(null);
+    setCurrentTime(0);
+  };
+
+  // Progression System
+  const updateLevel = (studySeconds) => {
+    // Calculate total XP buff from all shadows (base + per level)
+    const xpBonus = shadows.reduce((sum, s) => {
+      const base = s.baseBuffs?.xp || 0;
+      const perLvl = s.buffsPerLevel?.xp || 0;
+      return sum + base + perLvl * (s.level - 1);
+    }, 0);
+    const totalXp = xp + studySeconds * (1 + xpBonus);
+    setXp(totalXp);
+  };
+
+  // --- NEW: Role/rank system ---
+  const ranks = [
+    { min: 100, name: 'National Level Hunter', color: '#ff6b35' },
+    { min: 80, name: 'S-Rank Hunter', color: '#d100d1' },
+    { min: 60, name: 'A-Rank Hunter', color: '#4169E1' },
+    { min: 40, name: 'B-Rank Hunter', color: '#FF6347' },
+    { min: 20, name: 'C-Rank Hunter', color: '#FFD700' },
+    { min: 10, name: 'D-Rank Hunter', color: '#ADFF2F' },
+    { min: 1, name: 'E-Rank Hunter', color: '#90EE90' },
+    { min: 0, name: 'Civilian', color: '#666' },
   ];
+  const getRank = (level) => ranks.find(r => level >= r.min) || ranks[ranks.length - 1];
 
-  const activeSession = Boolean(data.session?.endsAt);
-  const currentTasks = [...data.tasks].sort((a, b) => Number(a.done) - Number(b.done));
+  const [playerAccepted, setPlayerAccepted] = useState(() => {
+    const saved = localStorage.getItem('playerAccepted');
+    return saved ? JSON.parse(saved) : false;
+  });
+  const [notification, setNotification] = useState(null);
+  const prevLevel = useRef(level);
+  const prevRank = useRef(getRank(level).name);
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <button className="brand-lockup" onClick={() => jumpTo('overview')} aria-label="Solo Prod home">
-          <span className="brand-emblem"><Shield size={22} strokeWidth={1.8} /><span>S</span></span>
-          <span className="brand-wordmark">SOLO<span>/</span>PROD<small>PLAYER SYSTEM</small></span>
-        </button>
+  // --- Show initial Player modal ---
+  useEffect(() => {
+    if (!playerAccepted) {
+      setNotification({
+        type: 'player',
+        message: 'You have acquired the qualifications to be a Player. Will you accept?',
+      });
+    }
+  }, [playerAccepted]);
 
-        <div className="side-section-label">YOUR SPACE</div>
-        <nav className="side-nav" aria-label="Main navigation">
-          {navItems.map(({ label, target, icon: Icon }, index) => (
-            <button className={`nav-item ${index === 0 ? 'nav-item-active' : ''}`} key={target} onClick={() => jumpTo(target)}>
-              <Icon size={17} strokeWidth={1.8} />
-              <span>{label}</span>
-              {index === 0 && <span className="nav-active-dot" />}
-            </button>
-          ))}
-        </nav>
+  // --- Show notification on level up or rank change ---
+  useEffect(() => {
+    const newRank = getRank(level).name;
+    if (level > prevLevel.current) {
+      setNotification({
+        type: 'level',
+        message: `Level Up!\nYou are now Level ${level}.`,
+      });
+    }
+    if (newRank !== prevRank.current) {
+      setNotification({
+        type: 'rank',
+        message: `Your rank has changed to ${newRank}!`,
+      });
+      prevRank.current = newRank;
+    }
+    prevLevel.current = level;
+  }, [level]);
 
-        <div className="side-quote">
-          <Sparkles size={15} />
-          <p>“You don't have to be great to start. You have to start to get stronger.”</p>
-          <span>PLAYER SYSTEM · DAILY DIRECTIVE</span>
-        </div>
+  // --- Accept Player modal handler ---
+  const handleAcceptPlayer = () => {
+    setPlayerAccepted(true);
+    localStorage.setItem('playerAccepted', 'true');
+    setNotification(null);
+  };
 
-        <div className="sidebar-bottom">
-          <button className={`ambience-button ${musicOn ? 'ambience-on' : ''}`} onClick={toggleMusic}>
-            <span className="ambience-icon"><Music2 size={16} /></span>
-            <span><strong>{musicOn ? 'Ambience on' : 'Study ambience'}</strong><small>{musicOn ? 'Lofi field active' : 'Tap to set the mood'}</small></span>
-            <span className={`sound-indicator ${musicOn ? 'sound-indicator-on' : ''}`}><i /><i /><i /></span>
-          </button>
-          <button className="player-mini" onClick={() => { setNameDraft(data.username); setProfileOpen(true); }}>
-            <span className="player-avatar"><UserRound size={19} /></span>
-            <span className="player-mini-info"><strong>{prettyName}</strong><small>Rank {rank} hunter · Lv. {player.level}</small></span>
-            <ChevronRight size={15} className="player-mini-arrow" />
-          </button>
-          <div className="sidebar-footnote">Your progress stays on this device.</div>
-        </div>
-      </aside>
-
-      <main className="workspace" id="overview">
-        <header className="topbar">
-          <div className="mobile-brand"><span className="brand-emblem"><Shield size={20} /><span>S</span></span><b>SOLO<span>/</span>PROD</b></div>
-          <div className="topbar-context"><span className="context-pulse" /> PLAYER SYSTEM <span className="context-divider">/</span> <span className="context-muted">COMMAND CENTER</span></div>
-          <div className="topbar-actions">
-            <button className={`top-icon-button ${musicOn ? 'top-icon-active' : ''}`} title={musicOn ? 'Turn ambience off' : 'Turn ambience on'} onClick={toggleMusic}><Music2 size={16} /></button>
-            <div className="top-rank"><span className="rank-diamond">{rank}</span><span>RANK <b>{rank}</b></span></div>
-            <button className="top-profile" onClick={() => { setNameDraft(data.username); setProfileOpen(true); }} aria-label="Edit player profile"><span className="top-profile-avatar"><UserRound size={16} /></span></button>
+  // --- Notification Modal component ---
+  const NotificationModal = ({ type, message, onClose }) => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
+      <div className="relative w-full max-w-md mx-auto rounded-xl border-2 border-[#00f7ff] bg-[#0a0a1a] shadow-2xl p-0 overflow-hidden" style={{ boxShadow: '0 0 40px #00f7ff55' }}>
+        <div className="flex flex-col items-center p-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="rounded-full border-2 border-[#00f7ff] p-2"><ExclamationMarkIcon /></div>
+            <span className="text-[#00f7ff] text-2xl font-bold tracking-widest">NOTIFICATION</span>
           </div>
-        </header>
-
-        {mobileMenuOpen && <div className="mobile-nav-popover">
-          {navItems.map(({ label, target, icon: Icon }) => <button key={target} onClick={() => jumpTo(target)}><Icon size={16} />{label}</button>)}
-        </div>}
-
-        <div className="mobile-nav-row">
-          <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}><Menu size={16} /> {mobileMenuOpen ? 'Close menu' : 'Navigate'}</button>
-          <button onClick={toggleMusic}><Music2 size={16} /> {musicOn ? 'Sound on' : 'Sound off'}</button>
+          <div className="text-[#b8eaff] text-center whitespace-pre-line text-lg mb-6">{message}</div>
+          {type === 'player' && (
+            <button
+              onClick={handleAcceptPlayer}
+              className="px-6 py-2 rounded bg-[#00f7ff] text-[#0a0a1a] font-bold text-lg shadow hover:bg-[#00e6e6] transition"
+            >
+              Accept
+            </button>
+          )}
+          {type !== 'player' && (
+            <button
+              onClick={onClose}
+              className="px-6 py-2 rounded bg-[#00f7ff] text-[#0a0a1a] font-bold text-lg shadow hover:bg-[#00e6e6] transition"
+            >
+              Close
+            </button>
+          )}
         </div>
-
-        <div className="page-content">
-          <section className="page-heading">
-            <div>
-              <div className="eyebrow"><span className="eyebrow-line" /> PERSONAL GROWTH PROTOCOL <span className="eyebrow-line" /></div>
-              <h1>Welcome back, <em>{prettyName}</em></h1>
-              <p className="page-subtitle">Your next level is built one focused session at a time.</p>
-            </div>
-            <div className="date-pill"><CalendarDays size={15} /><span>{dateLabel}</span></div>
-          </section>
-
-          <section className="hero-panel">
-            <div className="hero-copy">
-              <div className="hero-status"><span className="status-orb" /> SYSTEM LINK ESTABLISHED <span className="status-divider">·</span> ALL SYSTEMS NORMAL</div>
-              <div className="hero-kicker">TODAY'S POTENTIAL IS UNLOCKED</div>
-              <h2>Train your focus.<br /><span>Change your stats.</span></h2>
-              <p>Every minute you show up counts. Stack small wins, clear your missions, and let the levels take care of themselves.</p>
-              <button className="primary-cta" onClick={() => jumpTo('focus-room')}><Zap size={16} fill="currentColor" /> Start a focus session <ArrowRight size={16} /></button>
-              <div className="hero-footnote"><span><Shield size={13} /> BUILT FOR YOUR REAL LIFE</span><span className="hero-foot-sep" /> <span>NO PERFECT DAYS REQUIRED</span></div>
-            </div>
-            <div className="hero-art-wrap">
-              <div className="hero-art-grid" />
-              <div className="hero-art-frame"><img src="/images/reawaken.jpg" alt="" onError={(event) => { event.currentTarget.style.display = 'none'; }} /></div>
-              <div className="hero-art-overlay" />
-              <div className="hero-art-caption"><span className="caption-line" /><span><small>PLAYER DIRECTIVE · 001</small><strong>Become stronger<br />than yesterday.</strong></span></div>
-              <div className="art-corner art-corner-a" /><div className="art-corner art-corner-b" />
-              <div className="art-level-chip"><Sparkles size={13} /> YOUR STORY STARTS HERE</div>
-            </div>
-            <div className="hero-glow" />
-          </section>
-
-          <section className="stats-strip" aria-label="Today's stats">
-            <StatCard icon={Clock3} label="FOCUS TODAY" value={Math.floor(todaySeconds / 60)} suffix="min" note={todaySeconds ? 'Your time is adding up' : 'Start with one minute'} tone="cyan" />
-            <StatCard icon={Flame} label="CURRENT STREAK" value={streak} suffix={streak === 1 ? 'day' : 'days'} note={streak ? 'Keep the chain alive' : 'Begin a new streak today'} tone="orange" />
-            <StatCard icon={CheckCircle2} label="MISSIONS CLEARED" value={completedTasksToday} suffix="today" note="Every checked task earns XP" tone="violet" />
-            <StatCard icon={Coins} label="SYSTEM COINS" value={data.coins} suffix="G" note="Earn them as you progress" tone="gold" />
-          </section>
-
-          <section className="dashboard-grid">
-            <div className="main-column">
-              <section className="panel focus-panel" id="focus-room">
-                <div className="panel-heading focus-panel-heading">
-                  <div className="panel-title-group"><span className="panel-icon panel-icon-cyan"><Clock3 size={17} /></span><div><h3>Focus room</h3><p>Make this block yours.</p></div></div>
-                  <div className="focus-live"><span /> {activeSession ? 'SESSION LIVE' : data.session ? 'SESSION PAUSED' : 'READY WHEN YOU ARE'}</div>
-                </div>
-                <div className="timer-tabs" role="tablist" aria-label="Timer type">
-                  {Object.entries(MODES).map(([mode, config]) => <button key={mode} role="tab" aria-selected={timerMode === mode} className={timerMode === mode ? 'timer-tab timer-tab-active' : 'timer-tab'} onClick={() => chooseMode(mode)} disabled={activeSession}>{config.label}</button>)}
-                  <span className="timer-tab-note">{timerMode === 'focus' ? 'FOCUS BLOCK' : 'RESET YOUR MIND'}</span>
-                </div>
-                <div className="timer-stage">
-                  <div className="timer-orbit timer-orbit-a" /><div className="timer-orbit timer-orbit-b" />
-                  <div className="timer-ring-wrap">
-                    <svg className="timer-ring" viewBox="0 0 240 240" aria-hidden="true">
-                      <circle className="timer-ring-track" cx="120" cy="120" r="104" />
-                      <circle className="timer-ring-progress" cx="120" cy="120" r="104" strokeDasharray={timerCircumference} strokeDashoffset={timerCircumference * timerProgress} />
-                    </svg>
-                    <div className="timer-readout">
-                      <span className="timer-small-label">{timerMode === 'focus' ? 'TIME TO FOCUS' : 'TAKE A BREATH'}</span>
-                      <strong aria-live="polite">{formatDuration(secondsLeft)}</strong>
-                      <span className="timer-focus-tag"><span /> {data.session ? activeSession ? 'IN PROGRESS' : 'PAUSED' : 'READY'}</span>
-                    </div>
-                  </div>
-                  <div className="timer-motivation"><Sparkles size={13} /> {timerMode === 'focus' ? 'One thing at a time. You’ve got this.' : 'Rest is part of getting stronger.'}</div>
-                </div>
-                <div className="timer-controls">
-                  <div className="timer-presets" aria-label="Focus duration">
-                    {FOCUS_PRESETS.map((minutes) => <button key={minutes} className={`preset-button ${focusMinutes === minutes ? 'preset-active' : ''}`} onClick={() => { if (!data.session) setFocusMinutes(minutes); }} disabled={Boolean(data.session)}>{minutes}<small>m</small></button>)}
-                  </div>
-                  <div className="timer-main-actions">
-                    {activeSession
-                      ? <button className="timer-start-button timer-pause-button" onClick={pauseTimer}><Pause size={17} fill="currentColor" /> Pause</button>
-                      : <button className="timer-start-button" onClick={startTimer}><Play size={16} fill="currentColor" /> {data.session ? 'Resume focus' : timerMode === 'focus' ? 'Start focus' : 'Start break'}</button>}
-                    <button className="timer-reset-button" onClick={resetTimer} title="Reset timer" aria-label="Reset timer"><RotateCcw size={17} /></button>
-                  </div>
-                </div>
-                <div className="timer-footer"><span><Shield size={13} /> YOUR TIMER SAVES AUTOMATICALLY</span><button onClick={() => setShowManualLog(!showManualLog)}>{showManualLog ? 'Hide quick log' : 'Log time already studied'} <ChevronRight size={13} /></button></div>
-                {showManualLog && <form className="manual-log-form" onSubmit={(event) => { event.preventDefault(); logFocusMinutes(manualMinutes); }}>
-                  <div><strong>Log a past focus block</strong><small>Missed the timer? Add your study time here.</small></div>
-                  <label className="manual-input-wrap"><input type="number" min="1" max="240" value={manualMinutes} onChange={(event) => setManualMinutes(event.target.value)} placeholder="25" aria-label="Minutes studied" /><span>MIN</span></label>
-                  <button className="manual-log-button" type="submit"><Plus size={14} /> Add focus</button>
-                </form>}
-              </section>
-
-              <section className="panel tasks-panel" id="tasks">
-                <div className="panel-heading">
-                  <div className="panel-title-group"><span className="panel-icon panel-icon-violet"><ListChecks size={17} /></span><div><h3>Today's missions</h3><p>Choose your next small win.</p></div></div>
-                  <span className="task-count-pill">{data.tasks.filter((task) => task.done).length}/{data.tasks.length} DONE</span>
-                </div>
-                <form className="task-input-row" onSubmit={addTask}>
-                  <span className="task-input-plus"><Plus size={17} /></span>
-                  <input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="Add a task you want to finish…" aria-label="New task" maxLength={120} />
-                  <button type="submit" disabled={!newTask.trim()} aria-label="Add task"><ArrowRight size={17} /></button>
-                </form>
-                {currentTasks.length > 0 ? <ul className="task-list">
-                  {currentTasks.map((task) => <li className={`task-row ${task.done ? 'task-done' : ''}`} key={task.id}>
-                    <button className="task-check" onClick={() => toggleTask(task.id)} aria-label={task.done ? `Mark ${task.title} incomplete` : `Complete ${task.title}`}>{task.done ? <CheckCircle2 size={19} /> : <Circle size={19} />}</button>
-                    <span className="task-title">{task.title}</span>
-                    <span className="task-xp">{task.rewarded ? 'CLEARED' : '+15 XP'}</span>
-                    <button className="task-delete" onClick={() => deleteTask(task.id)} aria-label={`Delete ${task.title}`}><Trash2 size={15} /></button>
-                  </li>)}
-                </ul> : <div className="task-empty">
-                  <div className="empty-sigil"><Target size={18} /></div><strong>Your list is clear.</strong><span>Add a mission above or pick a quick start:</span>
-                  <div className="task-suggestions">{['Review my notes', 'Do 5 practice questions', 'Plan tomorrow'].map((suggestion) => <button key={suggestion} onClick={() => addSuggestedTask(suggestion)}><Plus size={12} />{suggestion}</button>)}</div>
-                </div>}
-                <div className="task-panel-foot"><span><Zap size={12} /> Each mission is worth 15 XP the first time you clear it.</span><span>PRIVATE TO THIS DEVICE</span></div>
-              </section>
-            </div>
-
-            <div className="side-column">
-              <section className="panel mission-panel" id="missions">
-                <div className="panel-heading">
-                  <div className="panel-title-group"><span className="panel-icon panel-icon-orange"><Target size={17} /></span><div><h3>Daily directives</h3><p>Complete these for bonus rewards.</p></div></div>
-                  <span className="reset-chip"><span /> RESETS DAILY</span>
-                </div>
-                <div className="directive-list">
-                  {missions.map((mission, index) => {
-                    const Icon = mission.icon;
-                    const progress = mission.progress / mission.goal;
-                    const claimed = (todaysLog.claimedQuests || []).includes(mission.id);
-                    const complete = progress >= 1;
-                    return <article className={`directive ${complete ? 'directive-complete' : ''}`} key={mission.id}>
-                      <div className="directive-top"><span className={`directive-icon directive-icon-${index}`}><Icon size={15} /></span><div className="directive-copy"><strong>{mission.title}</strong><small>{mission.detail}</small></div><span className="directive-reward"><Zap size={12} />{mission.reward}</span></div>
-                      <div className="directive-bottom"><div className="directive-meter"><span style={{ width: `${Math.min(progress * 100, 100)}%` }} /></div><span className="directive-progress">{mission.format(mission.progress, mission.goal)}</span></div>
-                      {complete && <button className={`claim-button ${claimed ? 'claim-button-done' : ''}`} onClick={() => claimMission(mission)} disabled={claimed}>{claimed ? <><Check size={13} /> REWARD CLAIMED</> : <>CLAIM REWARD <ArrowRight size={13} /></>}</button>}
-                    </article>;
-                  })}
-                </div>
-                <div className="mission-footer"><Sparkles size={13} /><span>Rewards are yours to claim when you finish.</span></div>
-              </section>
-
-              <section className="panel level-panel">
-                <div className="panel-heading level-panel-heading"><div className="panel-title-group"><span className="panel-icon panel-icon-gold"><Award size={17} /></span><div><h3>Player status</h3><p>Your progress, at a glance.</p></div></div><span className="rank-label">RANK {rank}</span></div>
-                <div className="level-identity"><div className="level-emblem"><span>{rank}</span><div /></div><div className="level-info"><span>HUNTER LEVEL</span><strong>{String(player.level).padStart(2, '0')} <small>LVL</small></strong><small className="level-role">{rank === 'E' ? 'Newly Awakened' : 'Rising Hunter'}</small></div><div className="level-spark"><Sparkles size={14} /></div></div>
-                <div className="xp-track-heading"><span>EXPERIENCE</span><span>{player.currentXp} <i>/</i> {player.nextLevelXp} XP</span></div>
-                <div className="xp-track"><span style={{ width: `${Math.min((player.currentXp / player.nextLevelXp) * 100, 100)}%` }} /></div>
-                <div className="xp-track-note"><span>{player.nextLevelXp - player.currentXp} XP to level {player.level + 1}</span><span><Coins size={12} /> {data.coins} G</span></div>
-              </section>
-
-              <section className="panel week-panel" id="progress">
-                <div className="panel-heading week-heading"><div className="panel-title-group"><span className="panel-icon panel-icon-cyan"><Activity size={17} /></span><div><h3>Progress &amp; history</h3><p>Consistency beats intensity.</p></div></div><span className="week-total"><b>{Math.floor(weekDays.reduce((sum, day) => sum + day.seconds, 0) / 60)}</b><small>THIS WEEK · MIN</small></span></div>
-                <div className="week-chart" aria-label="Focus minutes for the last seven days">
-                  {weekDays.map((day) => {
-                    const minutes = Math.floor(day.seconds / 60);
-                    const height = minutes ? Math.max(8, (minutes / maxWeekMinutes) * 100) : 4;
-                    const selected = day.key === today;
-                    return <div className="week-day" key={day.key} title={`${day.date.toLocaleDateString()}: ${minutes} focus minutes`}>
-                      <span className="week-value">{minutes || ''}</span>
-                      <div className={`week-bar ${selected ? 'week-bar-today' : ''}`} style={{ height: `${height}%` }}><i /></div>
-                      <span className={`week-day-label ${selected ? 'week-day-today' : ''}`}>{day.date.toLocaleDateString(undefined, { weekday: 'narrow' })}</span>
-                    </div>;
-                  })}
-                </div>
-                <div className="calendar-heading">
-                  <span className="calendar-kicker">FOCUS CALENDAR</span>
-                  <div className="calendar-month-switch">
-                    <button onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Show previous month"><ChevronLeft size={14} /></button>
-                    <strong>{calendarMonthLabel}</strong>
-                    <button onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))} disabled={viewingCurrentMonth} aria-label="Show next month"><ChevronRight size={14} /></button>
-                  </div>
-                  <span className="calendar-month-total"><b>{Math.floor(monthMinutes)}</b><small>MIN</small></span>
-                </div>
-                <div className="calendar-weekdays" aria-hidden="true">{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
-                <div className="calendar-grid" aria-label={`${calendarMonthLabel} focus calendar`}>
-                  {calendarCells.map((day, index) => day ? <button
-                    key={day.key}
-                    className={`calendar-day heat-${day.seconds === 0 ? 0 : day.seconds < 20 * 60 ? 1 : day.seconds < 45 * 60 ? 2 : day.seconds < 90 * 60 ? 3 : 4}${day.isToday ? ' calendar-day-today' : ''}${day.isFuture ? ' calendar-day-future' : ''}`}
-                    title={`${day.date.toLocaleDateString()}: ${Math.floor(day.seconds / 60)} focus minutes`}
-                    aria-label={`${day.date.toLocaleDateString(undefined, { dateStyle: 'full' })}, ${Math.floor(day.seconds / 60)} focus minutes`}
-                    disabled={day.isFuture}
-                  >{day.date.getDate()}</button> : <span key={`empty-${index}`} className="calendar-day calendar-day-empty" aria-hidden="true" />)}
-                </div>
-                <div className="heatmap-foot"><span>Each month starts on its real weekday.</span><span><Flame size={13} /> {streak} DAY STREAK</span></div>
-              </section>
-            </div>
-          </section>
-
-          <section className="closing-directive">
-            <div className="closing-sigil"><Trophy size={20} /></div><div><strong>The strongest version of you is built in ordinary moments.</strong><span>Choose one task. Give it your attention. That's a level up.</span></div><button onClick={() => jumpTo('focus-room')}>Back to focus <ArrowRight size={15} /></button>
-          </section>
-          <footer className="page-footer"><span>SOLO/PROD <i>·</i> YOUR PERSONAL PLAYER SYSTEM</span><span>MADE FOR PROGRESS, NOT PERFECTION</span></footer>
+        <div className="absolute inset-0 pointer-events-none">
+          {/* Neon border SVG overlay for extra Solo Leveling effect */}
+          <svg width="100%" height="100%" className="absolute inset-0 w-full h-full">
+            <rect x="8" y="8" width="calc(100% - 16px)" height="calc(100% - 16px)" rx="24" fill="none" stroke="#00f7ff" strokeWidth="2" opacity="0.5" />
+          </svg>
         </div>
-      </main>
-
-      {profileOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setProfileOpen(false); }}>
-        <form className="profile-modal" onSubmit={saveName} role="dialog" aria-modal="true" aria-labelledby="profile-title">
-          <button className="modal-close" type="button" onClick={() => setProfileOpen(false)} aria-label="Close profile"><X size={17} /></button>
-          <span className="modal-emblem"><UserRound size={21} /></span><div className="eyebrow modal-eyebrow">PLAYER CONFIGURATION</div><h2 id="profile-title">Your hunter profile</h2><p>Personalise the name shown in your command center.</p>
-          <label className="profile-field"><span>PLAYER NAME</span><input autoFocus value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={24} placeholder="Enter your name" /></label>
-          <button className="primary-cta modal-save" type="submit">Save profile <ArrowRight size={15} /></button>
-          <span className="modal-storage"><Shield size={13} /> Your progress is stored in this browser.</span>
-        </form>
-      </div>}
-
-      {toast && <div className="toast" role="status"><span className="toast-check"><Check size={14} /></span>{toast}</div>}
+      </div>
     </div>
   );
-}
 
-function StatCard({ icon: Icon, label, value, suffix, note, tone }) {
-  return <article className={`stat-card stat-${tone}`}><span className="stat-icon"><Icon size={16} /></span><span className="stat-label">{label}</span><strong className="stat-value">{value}<small>{suffix}</small></strong><span className="stat-note">{note}</span><span className="stat-edge" /></article>;
-}
+  // --- Exclamation icon for modal ---
+  function ExclamationMarkIcon() {
+    return (
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00f7ff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="13" /><circle cx="12" cy="16" r="1.2" /></svg>
+    );
+  }
 
-export default App;
+  // Heatmap Functions
+  const getHeatmapColor = (studySeconds) => {
+    return '#1a1a2b';
+  };
+
+  const renderHeatmap = () => {
+    const firstDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+    const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+
+    return [
+      ...Array(firstDay).fill().map((_, i) => (
+        <div key={`empty-${i}`} className="w-10 h-10 m-1 bg-transparent" />
+      )),
+      ...Array(daysInMonth).fill().map((_, i) => {
+        const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i + 1);
+        const dateString = date.toISOString().split('T')[0];
+        const dayData = heatmapData.find(d => d.date === dateString);
+        const studyHours = Math.round((dayData?.studyTime || 0) / 3600);
+        return (
+          <div
+            key={i + 1}
+            className="w-10 h-10 m-1 rounded-lg border border-[#00f7ff]/30 bg-[#1a1a2b] flex items-center justify-center transition-all duration-200 hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_12px_2px_rgba(0,247,255,0.10)]"
+            title={`${dateString}\nStudied: ${studyHours} hour${studyHours !== 1 ? 's' : ''}`}
+          >
+            <span className="text-white text-sm font-bold">{i + 1}</span>
+          </div>
+        );
+      })
+    ];
+  };
+
+  const changeMonth = (direction) => {
+    setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + direction));
+  };
+
+  // Todo Functions
+  const addTodo = () => {
+    if (newTodo.trim()) {
+      setTodos([...todos, { 
+        id: Date.now(), 
+        text: newTodo.trim(), 
+        completed: false 
+      }]);
+      setNewTodo('');
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      editingTodoId ? updateTodo() : addTodo();
+    }
+  };
+
+  const toggleTodo = (id) => {
+    setTodos(todos.map(todo => 
+      todo.id === id ? { ...todo, completed: !todo.completed } : todo
+    ));
+  };
+
+  const deleteTodo = (id) => {
+    setTodos(todos.filter(todo => todo.id !== id));
+  };
+
+  const updateTodo = () => {
+    if (newTodo.trim()) {
+      setTodos(todos.map(todo => 
+        todo.id === editingTodoId 
+          ? { ...todo, text: newTodo.trim() }
+          : todo
+      ));
+      setNewTodo('');
+      setEditingTodoId(null);
+    }
+  };
+
+  const startEditTodo = (todo) => {
+    setNewTodo(todo.text);
+    setEditingTodoId(todo.id);
+  };
+
+  // Add new component implementations:
+  const DailyQuests = ({ quests, updateQuestProgress, ariseCount, attemptArise }) => (
+    <div className="bg-system-secondary p-6 rounded-xl border border-system-accent/30">
+      <div className="flex items-center gap-3 mb-6">
+        <ScrollText className="text-system-accent" size={28} />
+        <h2 className="text-2xl font-bold glow">DAILY GATES</h2>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-dungeon-accent">{ariseCount}</span>
+          <button
+            onClick={attemptArise}
+            className="bg-dungeon-accent/90 hover:bg-dungeon-accent p-2 rounded-lg"
+          >
+            <Ghost size={24} />
+          </button>
+        </div>
+      </div>
+      <div className="space-y-4">
+        {quests.map(quest => (
+          <div
+            key={quest.id}
+            className={`bg-dungeon-primary/50 p-4 rounded-lg flex flex-col gap-2 transition-all duration-200 border border-transparent hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]`}
+          >
+            <div className="flex items-center gap-3 mb-2">
+              <button
+                className={`p-2 rounded-full border-2 flex items-center justify-center transition-all duration-200
+                  ${quest.completed ? 'bg-green-900/50 border-green-400 text-green-300 cursor-not-allowed' : 'bg-dungeon-secondary border-[#00f7ff]/40 text-[#00f7ff] hover:bg-[#00f7ff]/10 hover:border-[#00f7ff] hover:scale-110 cursor-pointer'}`}
+                disabled={quest.completed}
+                onClick={() => !quest.completed && updateQuestProgress(quest.id, quest.target - quest.progress)}
+                title={quest.completed ? 'Completed' : 'Mark as complete'}
+                style={{ minWidth: 40, minHeight: 40 }}
+              >
+                {quest.completed ? <Check size={20} /> : <Crosshair size={20} />}
+              </button>
+              <div>
+                <h3 className="font-bold">{quest.title}</h3>
+                <p className="text-sm text-dungeon-text/70">{quest.description}</p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <span className="text-sm text-[#00f7ff] font-bold">{quest.progress}/{quest.target}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 bg-dungeon-primary h-2 rounded-full">
+                <div
+                  className="h-full bg-dungeon-accent rounded-full transition-all"
+                  style={{ width: `${(quest.progress / quest.target) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // --- Shadow Odds Tooltip ---
+  const shadowOdds = [
+    { name: 'Beru', rarity: 'Legendary', percent: 1 },
+    { name: 'Tusk', rarity: 'Epic', percent: 2 },
+    { name: 'Kaisel', rarity: 'Epic', percent: 2 },
+    { name: 'Igris', rarity: 'Rare', percent: 4 },
+    { name: 'Iron', rarity: 'Rare', percent: 4 },
+    { name: 'Fangs', rarity: 'Uncommon', percent: 7 },
+  ];
+  const getShadowOddsTooltip = () => (
+    <div className="bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-50 min-w-[220px] text-center animate-fade-in">
+      <div className="text-[#00f7ff] font-bold mb-2">Shadow Summon Odds</div>
+      {shadowOdds.map((s, i) => (
+        <div key={i} className="flex items-center justify-between text-sm mb-1">
+          <span className="font-bold" style={{ color: RARITY_COLORS[s.rarity] }}>{s.name}</span>
+          <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: RARITY_COLORS[s.rarity], color: '#0a0a1a' }}>{s.rarity}</span>
+          <span className="ml-2 text-[#b8eaff]">{s.percent}%</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  // --- Update ShadowInventory UI: add odds tooltip icon ---
+  const [showOdds, setShowOdds] = useState(false);
+  const ShadowInventory = ({ shadows, shadowSlots, currency, purchaseShadowSlot }) => (
+    <div className="bg-system-secondary p-6 rounded-xl border border-system-accent/30">
+      <div className="flex items-center gap-3 mb-6">
+        <Skull className="text-system-accent" size={28} />
+        <h2 className="text-2xl font-bold glow flex items-center gap-2">SHADOW ARMY
+          <span
+            className="ml-2 cursor-pointer relative"
+            onMouseEnter={() => setShowOdds(true)}
+            onMouseLeave={() => setShowOdds(false)}
+          >
+            <span className="inline-block w-5 h-5 rounded-full bg-[#00f7ff]/20 border border-[#00f7ff] flex items-center justify-center text-[#00f7ff] font-bold text-xs">?</span>
+            {showOdds && (
+              <span className="absolute left-1/2 top-full mt-2 -translate-x-1/2 z-50">{getShadowOddsTooltip()}</span>
+            )}
+          </span>
+        </h2>
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Coins size={20} />
+            <span>{currency}</span>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        {[...Array(shadowSlots)].map((_, i) => (
+          <div
+            key={i}
+            className={`bg-[#1a1a2b] text-[#00f7ff] rounded-lg p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center border border-transparent ${activeTimer === i ? 'bg-[#083A48] border-2 border-[#00f7ff] shadow-[0_0_32px_8px_rgba(0,247,255,0.35)] scale-105' : 'hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]'}`}
+            onClick={() => startTimer(i)}
+            onMouseEnter={() => setHoveredBlock(i)}
+            onMouseLeave={() => setHoveredBlock(null)}
+            style={{ minHeight: 140, minWidth: 0 }}
+          >
+            {shadows[i] ? (
+              <>
+                {/* Remove button, visible on hover */}
+                <button
+                  className="absolute top-2 right-2 z-10 p-1 rounded-full bg-[#1a1a2b] border border-[#00f7ff]/40 text-[#00f7ff] opacity-0 group-hover:opacity-100 transition-all hover:bg-[#ff4650] hover:text-white hover:border-[#ff4650]"
+                  style={{ boxShadow: '0 0 8px 2px #00f7ff22' }}
+                  title="Remove Shadow"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeShadow(i);
+                  }}
+                >
+                  <X size={16} />
+                </button>
+                <Ghost size={36} className="text-[#00f7ff] group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" />
+                {hoveredBlock === i && (
+                  <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[220px] text-center animate-fade-in">
+                    <div className="text-2xl font-bold mb-1 tracking-wider" style={{ color: RARITY_COLORS[shadows[i].rarity] }}>{shadows[i].name}</div>
+                    <div className="mb-1 px-2 py-0.5 rounded-full text-xs font-bold inline-block" style={{ background: RARITY_COLORS[shadows[i].rarity], color: '#0a0a1a' }}>{shadows[i].rarity}</div>
+                    <div className="text-[#b8eaff] text-sm mb-1">{shadows[i].rank} &bull; Lv. {shadows[i].level}</div>
+                    <div className="flex flex-col gap-1 mb-1">
+                      {Object.entries(shadows[i].baseBuffs).map(([buff, val]) => (
+                        <div key={buff} className="flex items-center gap-2 text-xs">
+                          <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                            {Math.round((val + (shadows[i].buffsPerLevel?.[buff] || 0) * (shadows[i].level - 1)) * 100)}%
+                          </span>
+                          <span className="text-[#b8eaff]" title={
+                            buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                            buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                            buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                            buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                            buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                            buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                            ''
+                          }>
+                            {buff === 'xp' ? 'XP Gain' :
+                             buff === 'studyEff' ? 'Study Efficiency' :
+                             buff === 'coins' ? 'Bonus Coins' :
+                             buff === 'idle' ? 'Idle→XP' :
+                             buff === 'play' ? 'Play→XP' :
+                             buff === 'quest' ? 'Quest Speed' :
+                             buff}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-[#b8eaff] italic mb-1 text-center">{shadows[i].description}</div>
+                    <div className="flex items-center gap-2 justify-center mt-2">
+                      <span className="text-sm font-bold">Lv. {shadows[i].level}</span>
+                      <button
+                        className={`ml-2 px-2 py-1 rounded bg-[#00f7ff] text-[#0a0a1a] text-xs font-bold shadow hover:bg-[#00e6e6] transition ${shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          levelUpShadow(i);
+                        }}
+                        title={shadows[i].level >= MAX_SHADOW_LEVEL ? 'Max Level' : currency < LEVEL_UP_COST(shadows[i].level) ? 'Not enough coins' : `Level Up (${LEVEL_UP_COST(shadows[i].level)} coins)`}
+                      >
+                        Level Up
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <Ghost className="text-[#00f7ff]/30 group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" size={36} />
+            )}
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={purchaseShadowSlot}
+        className="w-full bg-dungeon-accent/90 hover:bg-dungeon-accent p-2 rounded-lg flex items-center justify-center gap-2"
+      >
+        <Gem size={18} />
+        Purchase Shadow Slot ({500 + (shadowSlots * 250)} Coins)
+      </button>
+    </div>
+  );
+
+
+  // Profile Components
+  const ProfileModal = () => {
+    const totalProductivity = calculateProductivity(totalTimers);
+    const totalStudyHours = Math.floor(totalTimers.study / 3600);
+    const currentTitle = getRank(level);
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div className="bg-system-primary rounded-2xl w-11/12 max-w-2xl p-8 relative border border-system-accent">
+          <button 
+            onClick={() => setIsProfileOpen(false)}
+            className="absolute top-4 right-4 text-gray-300 hover:text-white"
+          >
+            <X size={28} />
+          </button>
+
+          <div className="flex flex-col md:flex-row gap-8">
+            <div className="flex-1 space-y-6">
+              <div className="relative group mx-auto w-40 h-40">
+                <div className="w-full h-full rounded-full border-4 border-cyan-500 overflow-hidden">
+                  {profilePicture ? (
+                    <img 
+                      src={profilePicture} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                      key={profilePicture}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-700 flex items-center justify-center">
+                      <User className="w-20 h-20 text-gray-500" />
+                    </div>
+                  )}
+                </div>
+                <label 
+                  htmlFor="profile-pic-upload"
+                  className="absolute bottom-0 right-0 bg-cyan-600 p-2 rounded-full cursor-pointer hover:bg-cyan-500"
+                >
+                  <Camera size={20} className="text-white" />
+                  <input 
+                    type="file" 
+                    id="profile-pic-upload"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleProfilePictureUpload}
+                  />
+                </label>
+              </div>
+
+              <div className="text-center">
+                {isEditingUsername ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="bg-gray-700 text-white px-4 py-2 rounded-lg focus:outline-none"
+                      autoFocus
+                      maxLength={20}
+                    />
+                    <button
+                      onClick={() => setIsEditingUsername(false)}
+                      className="bg-cyan-600 text-white p-2 rounded-lg"
+                    >
+                      <Check />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-1">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-2xl font-bold">{username}</h2>
+                      <button
+                        onClick={() => setIsEditingUsername(true)}
+                        className="text-gray-400 hover:text-cyan-300"
+                      >
+                        <Edit size={20} />
+                      </button>
+                    </div>
+                    <div 
+                      className="px-3 py-1 rounded-full text-sm font-medium bg-gray-800/50"
+                      style={{ color: currentTitle.color }}
+                    >
+                      {currentTitle.name}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-gray-700 p-4 rounded-xl">
+                <div className="flex items-center gap-2 mb-4">
+                  <Trophy className="text-amber-400" />
+                  <h3 className="text-xl font-semibold">Level {level}</h3>
+                </div>
+                <div className="relative pt-1">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-cyan-400">Progress</span>
+                    <span className="text-cyan-400">{calculateXpPercentage()}%</span>
+                  </div>
+                  <div className="overflow-hidden h-2 mb-4 rounded-full bg-gray-800">
+                    <div
+                      style={{ width: `${calculateXpPercentage()}%` }}
+                      className="h-full bg-cyan-500 rounded-full transition-all duration-300"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-6">
+              <div className="space-y-4">
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Star className="text-cyan-400" /> Lifetime Stats
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <StatCard 
+                    title="Total Study" 
+                    value={formatTime(totalTimers.study)} 
+                    icon={<BookOpen className="text-cyan-400" />}
+                  />
+                  <StatCard 
+                    title="Total Play" 
+                    value={formatTime(totalTimers.play)} 
+                    icon={<Gamepad className="text-green-400" />}
+                  />
+                  <StatCard 
+                    title="Productivity" 
+                    value={`${totalProductivity}%`} 
+                    icon={<Clock className="text-purple-400" />}
+                  />
+                </div>
+                
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const StatCard = ({ title, value, icon }) => (
+    <div className="bg-gray-700 p-3 rounded-lg flex items-center gap-3 min-w-0">
+      <div className="p-2 bg-gray-800 rounded-lg shrink-0">{icon}</div>
+      <div className="min-w-0">
+        <p className="text-sm text-gray-400 truncate">{title}</p>
+        <p className="text-lg font-bold truncate">{value}</p>
+      </div>
+    </div>
+  );
+
+  const handleProfilePictureUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (reader.result) {
+          setProfilePicture(reader.result);
+          localStorage.setItem('productivityProfilePic', reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const currentTitle = getRank(level);
+
+  // --- NEW: Neon block style helper ---
+  const neonBlock = (type) =>
+    `system-panel p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center ` +
+    (activeTimer === type
+      ? 'border-2 border-[#00f7ff] shadow-[0_0_24px_4px_rgba(0,247,255,0.8)] bg-[#00f7ff]/10 scale-105 z-10'
+      : hoveredBlock === type
+        ? 'border-2 border-[#00f7ff] shadow-[0_0_12px_2px_rgba(0,247,255,0.4)] bg-[#00f7ff]/5 scale-105'
+        : 'border border-[#00f7ff]/20');
+
+  // --- NEW: Pause handler logs time, deselects activity, and hides buttons ---
+  const handlePause = () => {
+    if (activeTimer) {
+      setDailyTimers(prev => ({
+        ...prev,
+        [activeTimer]: prev[activeTimer] + currentTime
+      }));
+      if (activeTimer === 'study') {
+        updateQuestProgress(1, currentTime);
+        const today = new Date().toISOString().split('T')[0];
+        setHeatmapData(prev =>
+          prev.map(item =>
+            item.date === today
+              ? { ...item, studyTime: item.studyTime + currentTime }
+              : item
+          )
+        );
+        updateLevel(currentTime);
+      }
+      setActiveTimer(null);
+      setCurrentTime(0);
+    }
+  };
+
+  // --- NEW: Activity color helper: selected block uses same lighter blue as todo hover ---
+  const activityBg = (type) =>
+    activeTimer === type
+      ? 'bg-[#00f7ff]/20 text-[#00f7ff] shadow-[0_0_32px_6px_rgba(0,247,255,0.35)]'
+      : hoveredBlock === type
+        ? 'bg-[#193a4d]/40 text-[#00f7ff] shadow-[0_0_12px_2px_rgba(0,247,255,0.10)]'
+        : 'bg-[#1a1a2b] text-[#00f7ff] hover:bg-[#193a4d]/40 transition-colors';
+
+  // --- NEW: Arise message state ---
+  const [ariseMessage, setAriseMessage] = useState(null);
+  const [ariseMessageType, setAriseMessageType] = useState('info');
+
+  // Add state for hovered shadow index
+  const [hoveredShadow, setHoveredShadow] = useState(null);
+
+  // --- Shadow Level Up ---
+  const levelUpShadow = idx => {
+    setShadows(prev => prev.map((s, i) => {
+      if (i !== idx) return s;
+      if (s.level >= MAX_SHADOW_LEVEL) return s;
+      if (currency < LEVEL_UP_COST(s.level)) return s;
+      setCurrency(c => c - LEVEL_UP_COST(s.level));
+      setAriseMessageType('success');
+      setAriseMessage(`${s.name} leveled up! Now Level ${s.level + 1}`);
+      return { ...s, level: s.level + 1 };
+    }));
+  };
+
+  // --- Calculate total buffs (with caps) ---
+  const getTotalBuffs = () => {
+    const total = { xp: 0, studyEff: 0, coins: 0, idle: 0, play: 0, quest: 0 };
+    for (const s of shadows) {
+      for (const k in total) {
+        const base = s.baseBuffs?.[k] || 0;
+        const perLvl = s.buffsPerLevel?.[k] || 0;
+        total[k] += base + perLvl * (s.level - 1);
+      }
+    }
+    for (const k in total) total[k] = Math.min(total[k], BUFF_CAPS[k]);
+    return total;
+  };
+
+  // --- Unboxing Modal UI ---
+  const UnboxModal = ({ shadow, onClose }) => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 animate-fade-in">
+      <div className="relative w-full max-w-xs mx-auto rounded-2xl border-4 border-[#00f7ff] bg-[#0a0a1a] shadow-2xl p-0 overflow-hidden animate-pulse" style={{ boxShadow: '0 0 60px #00f7ff88' }}>
+        <div className="flex flex-col items-center p-8 animate-fade-in">
+          <div className="mb-4 animate-bounce">
+            <Ghost size={48} className="text-[#00f7ff] drop-shadow-glow" />
+          </div>
+          <div className="text-2xl font-bold mb-2 tracking-wider" style={{ color: RARITY_COLORS[shadow.rarity] }}>{shadow.name}</div>
+          <div className="mb-2 px-3 py-1 rounded-full text-xs font-bold" style={{ background: RARITY_COLORS[shadow.rarity], color: '#0a0a1a' }}>{shadow.rarity}</div>
+          <div className="text-[#b8eaff] text-sm mb-2">{shadow.rank}</div>
+          <div className="flex flex-col gap-1 mb-2">
+            {Object.entries(shadow.baseBuffs).map(([buff, val]) => (
+              <div key={buff} className="flex items-center gap-2 text-xs">
+                <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                  {Math.round(val * 100)}%
+                </span>
+                <span className="text-[#b8eaff]" title={
+                  buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                  buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                  buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                  buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                  buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                  buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                  ''
+                }>
+                  {buff === 'xp' ? 'XP Gain' :
+                   buff === 'studyEff' ? 'Study Efficiency' :
+                   buff === 'coins' ? 'Bonus Coins' :
+                   buff === 'idle' ? 'Idle→XP' :
+                   buff === 'play' ? 'Play→XP' :
+                   buff === 'quest' ? 'Quest Speed' :
+                   buff}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-[#b8eaff] italic mb-4 text-center">{shadow.description}</div>
+          <button
+            onClick={onClose}
+            className="px-6 py-2 rounded bg-[#00f7ff] text-[#0a0a1a] font-bold text-lg shadow hover:bg-[#00e6e6] transition mt-2"
+          >
+            Continue
+          </button>
+        </div>
+        <div className="absolute inset-0 pointer-events-none">
+          <svg width="100%" height="100%" className="absolute inset-0 w-full h-full">
+            <rect x="8" y="8" width="calc(100% - 16px)" height="calc(100% - 16px)" rx="24" fill="none" stroke="#00f7ff" strokeWidth="2" opacity="0.5" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- Remove shadow function ---
+  const removeShadow = idx => {
+    setShadows(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0a0a1a] p-6 max-w-6xl mx-auto font-mono text-[#00f7ff]">
+      {/* Header Section */}
+      <div className="flex justify-between items-center mb-8 border-b border-[#00f7ff]/20 pb-4">
+        <h1 className="text-4xl font-bold glow-text">THE SYSTEM</h1>
+        <div className="flex items-center gap-6">
+          {/* --- NEW: Show total money --- */}
+          <div className="flex items-center gap-2 text-xl font-bold text-[#00f7ff] bg-[#001a1a] px-4 py-2 rounded-lg border border-[#00f7ff]/40">
+            <DollarSign className="w-6 h-6" />
+            {currency}
+          </div>
+          <div className="text-xl">
+            <span className="ml-3 px-3 py-1 rounded-full border border-[#00f7ff]/40 text-sm font-bold" style={{ color: getRank(level).color }}>{getRank(level).name}</span>
+          </div>
+          {/* --- Show profile picture in header, update with state --- */}
+          <button 
+            onClick={() => setIsProfileOpen(true)}
+            className="p-1 hover:bg-[#00f7ff]/10 rounded-full"
+          >
+            {profilePicture ? (
+              <img
+                src={profilePicture}
+                alt="Profile"
+                className="w-8 h-8 rounded-full object-cover border-2 border-[#00f7ff]"
+                key={profilePicture}
+              />
+            ) : (
+            <User className="w-8 h-8" />
+            )}
+          </button>
+        </div>
+      </div>
+  
+      {/* After the header section, add a glowing level bar: */}
+      <div className="w-full flex flex-col items-center mb-8">
+        <div className="w-full max-w-2xl px-4">
+          <div className="relative h-5 bg-[#0a2233] rounded-full overflow-hidden border-2 border-[#00f7ff]/40 shadow-[0_0_16px_2px_rgba(0,247,255,0.25)]">
+            <div
+              className="absolute left-0 top-0 h-full bg-gradient-to-r from-[#00f7ff] to-[#00bfff] rounded-full shadow-[0_0_24px_8px_rgba(0,247,255,0.4)] transition-all duration-500"
+              style={{ width: `${calculateXpPercentage()}%` }}
+            ></div>
+            <div className="relative z-10 flex justify-between items-center h-full px-3 text-xs text-[#b8eaff] font-bold tracking-wider">
+              <span>Level {level}</span>
+              <span>{Math.floor(xp % 3600)}/{3600} XP</span>
+            </div>
+          </div>
+        </div>
+      </div>
+  
+      {/* --- NEW: Arise message UI --- */}
+      {ariseMessage && (
+        <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl shadow-lg border-2 text-lg font-bold transition-all duration-300
+          ${ariseMessageType === 'success' ? 'bg-[#0a1a1a] border-[#00f7ff] text-[#00f7ff]' : ''}
+          ${ariseMessageType === 'error' ? 'bg-[#1a0a0a] border-[#ff4650] text-[#ff4650]' : ''}
+        `}>
+          {ariseMessage}
+          <button className="ml-4 text-sm underline" onClick={() => setAriseMessage(null)}>Dismiss</button>
+        </div>
+      )}
+  
+      {/* Main Dashboard Grid */}
+      <div className="grid grid-cols-3 gap-6">
+        {/* Left Column */}
+        <div className="col-span-2 space-y-6">
+          {/* Timer Cards */}
+          <div className="grid grid-cols-3 gap-4">
+            {['study', 'play', 'idle'].map((type) => (
+              <div
+                key={type}
+                className={`bg-[#1a1a2b] text-[#00f7ff] rounded-lg p-4 cursor-pointer transition-all duration-200 select-none flex flex-col items-center justify-center border border-transparent ${activeTimer === type ? 'bg-[#083A48] border-2 border-[#00f7ff] shadow-[0_0_32px_8px_rgba(0,247,255,0.35)] scale-105' : 'hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]'}`}
+                onClick={() => startTimer(type)}
+                onMouseEnter={() => setHoveredBlock(type)}
+                onMouseLeave={() => setHoveredBlock(null)}
+                style={{ minHeight: 140, minWidth: 0 }}
+              >
+                <div className="text-lg mb-2 tracking-wider">{type.toUpperCase()}</div>
+                <div className="text-3xl font-bold mb-3">
+                  {formatTime(activeTimer === type ? currentTime : dailyTimers[type])}
+                </div>
+                {/* Manual Time Input */}
+                {type !== 'idle' && (
+                  <div className="mt-4 w-full">
+                    <input
+                      type="number"
+                      placeholder="+ Add mins"
+                      value={manualTime[type].minutes}
+                      onChange={(e) => handleManualInputChange(type, 'minutes', e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && addManualTime(type)}
+                      className="system-input mt-2 w-full"
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+  
+          {/* Pause/Refresh controls below activities, centered */}
+          {activeTimer && (
+            <div className="flex justify-center gap-4 my-6">
+              <button 
+                onClick={handlePause}
+                className="system-button bg-[#00f7ff] text-[#0a0a1a] hover:bg-[#00f7ff]/90"
+              >
+                <Pause size={28} />
+              </button>
+              <button 
+                onClick={resetTimer}
+                className="system-button bg-[#ff4650] hover:bg-[#ff4650]/90"
+              >
+                <RefreshCw size={28} />
+              </button>
+            </div>
+          )}
+  
+          {/* Todo List */}
+          <div className="system-panel p-6">
+            <h2 className="text-xl font-bold mb-4">Todo List</h2>
+            <div className="flex mb-4">
+              <input
+                type="text"
+                value={newTodo}
+                onChange={(e) => setNewTodo(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="system-input flex-grow"
+                placeholder="Enter a new todo"
+              />
+              <button 
+                onClick={editingTodoId ? updateTodo : addTodo}
+                className="system-button ml-2"
+              >
+                {editingTodoId ? <Check size={20} /> : <PlusCircle size={20} />}
+              </button>
+            </div>
+            <div className="space-y-2">
+              {todos.map(todo => (
+                <div key={todo.id} className="flex items-center p-2 hover:bg-[#00f7ff]/5 rounded">
+                  {/* --- Custom neon checkbox --- */}
+                  <label className="relative flex items-center cursor-pointer mr-2">
+                  <input
+                    type="checkbox"
+                    checked={todo.completed}
+                    onChange={() => toggleTodo(todo.id)}
+                      className="peer appearance-none w-5 h-5 rounded border-2 border-[#00f7ff] bg-[#0a0a1a] checked:bg-[#00f7ff] checked:border-[#00f7ff] focus:ring-2 focus:ring-[#00f7ff] transition-all duration-200"
+                      style={{ boxShadow: todo.completed ? '0 0 8px 2px #00f7ff' : 'none' }}
+                    />
+                    <span className="absolute inset-0 flex items-center justify-center pointer-events-none select-none text-[#0a0a1a] text-lg font-bold peer-checked:opacity-100 opacity-0 transition">✓</span>
+                  </label>
+                  <span
+                    className={`flex-grow ${todo.completed ? 'line-through text-[#00f7ff]/50' : ''}`}
+                    onDoubleClick={() => startEditTodo(todo)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    {todo.text}
+                  </span>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => startEditTodo(todo)} 
+                      className="system-icon-button"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button 
+                      onClick={() => deleteTodo(todo.id)} 
+                      className="system-icon-button text-[#ff4650]"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+  
+          {/* Heatmap */}
+          <div className="system-panel p-6">
+            <div className="flex justify-between items-center mb-4">
+              <button onClick={() => changeMonth(-1)} className="system-icon-button">
+                <ChevronLeft />
+              </button>
+              <h2 className="text-xl font-bold">
+                {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </h2>
+              <button onClick={() => changeMonth(1)} className="system-icon-button">
+                <ChevronRight />
+              </button>
+            </div>
+            <div className="grid grid-cols-7 gap-1 text-center">
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
+                <div key={day} className="text-sm font-bold">{day}</div>
+              ))}
+              {renderHeatmap()}
+            </div>
+          </div>
+        </div>
+  
+        {/* Right Column */}
+        <div className="space-y-6">
+          {/* Daily Quests */}
+          <div className="system-panel p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <ScrollText size={24} />
+              <h2 className="text-xl font-bold">Daily Gates</h2>
+              {/* --- NEW: Arise button beside title --- */}
+                <button
+                  onClick={attemptArise}
+                className="system-button ml-2 bg-[#00f7ff]/10 hover:bg-[#00f7ff]/20 flex items-center gap-1"
+                >
+                <ArrowUpCircle size={22} /> Arise
+                </button>
+              <div className="ml-auto flex items-center gap-2">
+                <span className="text-sm">{ariseCount}</span>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {dailyQuests.map(quest => (
+                <div
+                  key={quest.id}
+                  className={`bg-dungeon-primary/50 p-4 rounded-lg flex flex-col gap-2 transition-all duration-200 border border-transparent hover:scale-105 hover:border-[#00f7ff] hover:shadow-[0_0_24px_4px_rgba(0,247,255,0.15)]`}
+                >
+                  <div className="flex items-center gap-3 mb-2">
+                    <button
+                      className={`p-2 rounded-full border-2 flex items-center justify-center transition-all duration-200
+                        ${quest.completed ? 'bg-green-900/50 border-green-400 text-green-300 cursor-not-allowed' : 'bg-dungeon-secondary border-[#00f7ff]/40 text-[#00f7ff] hover:bg-[#00f7ff]/10 hover:border-[#00f7ff] hover:scale-110 cursor-pointer'}`}
+                      disabled={quest.completed}
+                      onClick={() => !quest.completed && updateQuestProgress(quest.id, quest.target - quest.progress)}
+                      title={quest.completed ? 'Completed' : 'Mark as complete'}
+                      style={{ minWidth: 40, minHeight: 40 }}
+                    >
+                      {quest.completed ? <Check size={20} /> : <Crosshair size={20} />}
+                    </button>
+                    <div>
+                      <h3 className="font-bold">{quest.title}</h3>
+                      <p className="text-sm text-dungeon-text/70">{quest.description}</p>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-sm text-[#00f7ff] font-bold">{quest.progress}/{quest.target}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 bg-dungeon-primary h-2 rounded-full">
+                      <div
+                        className="h-full bg-dungeon-accent rounded-full transition-all"
+                        style={{ width: `${(quest.progress / quest.target) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+  
+          {/* Shadow Inventory */}
+          <div className="system-panel p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <Skull size={24} />
+              <h2 className="text-xl font-bold">Shadow Army</h2>
+              <button
+                onClick={purchaseShadowSlot}
+                className="system-button ml-auto bg-[#00f7ff]/10 hover:bg-[#00f7ff]/20 flex flex-col items-center px-3 py-2 min-w-[120px]"
+              >
+                <span className="flex items-center gap-1"><Gem size={18} /> + Slot</span>
+                <span className="text-xs mt-1 whitespace-nowrap">({shadowSlotCost} <DollarSign className="inline w-4 h-4" />)</span>
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {[...Array(shadowSlots)].map((_, i) => (
+                <div 
+                  key={i} 
+                  className="aspect-square bg-[#1a1a2b] rounded-lg flex items-center justify-center relative group"
+                  onMouseEnter={() => setHoveredShadow(i)}
+                  onMouseLeave={() => setHoveredShadow(null)}
+                >
+                  {shadows[i] ? (
+                    <>
+                      {/* Remove button, visible on hover */}
+                      <button
+                        className="absolute top-2 right-2 z-10 p-1 rounded-full bg-[#1a1a2b] border border-[#00f7ff]/40 text-[#00f7ff] opacity-0 group-hover:opacity-100 transition-all hover:bg-[#ff4650] hover:text-white hover:border-[#ff4650]"
+                        style={{ boxShadow: '0 0 8px 2px #00f7ff22' }}
+                        title="Remove Shadow"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeShadow(i);
+                        }}
+                      >
+                        <X size={16} />
+                      </button>
+                      <Ghost size={36} className="text-[#00f7ff] group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" />
+                      {hoveredShadow === i && (
+                        <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full bg-[#0a2233] border-2 border-[#00f7ff] rounded-lg px-4 py-2 shadow-lg z-20 min-w-[220px] text-center animate-fade-in">
+                          <div className="text-2xl font-bold mb-1 tracking-wider" style={{ color: RARITY_COLORS[shadows[i].rarity] }}>{shadows[i].name}</div>
+                          <div className="mb-1 px-2 py-0.5 rounded-full text-xs font-bold inline-block" style={{ background: RARITY_COLORS[shadows[i].rarity], color: '#0a0a1a' }}>{shadows[i].rarity}</div>
+                          <div className="text-[#b8eaff] text-sm mb-1">{shadows[i].rank} &bull; Lv. {shadows[i].level}</div>
+                          <div className="flex flex-col gap-1 mb-1">
+                            {Object.entries(shadows[i].baseBuffs).map(([buff, val]) => (
+                              <div key={buff} className="flex items-center gap-2 text-xs">
+                                <span className="font-bold" style={{ color: '#00f7ff' }}>+
+                                  {Math.round((val + (shadows[i].buffsPerLevel?.[buff] || 0) * (shadows[i].level - 1)) * 100)}%
+                                </span>
+                                <span className="text-[#b8eaff]" title={
+                                  buff === 'xp' ? 'XP Gain: Increases all XP earned.' :
+                                  buff === 'studyEff' ? 'Study Timer Efficiency: Each second of study counts for more.' :
+                                  buff === 'coins' ? 'Bonus Coins: More coins from quests.' :
+                                  buff === 'idle' ? 'Idle Conversion: Idle time gives XP.' :
+                                  buff === 'play' ? 'Play Conversion: Play time gives XP.' :
+                                  buff === 'quest' ? 'Quest Speed: Complete quests faster.' :
+                                  ''
+                                }>
+                                  {buff === 'xp' ? 'XP Gain' :
+                                   buff === 'studyEff' ? 'Study Efficiency' :
+                                   buff === 'coins' ? 'Bonus Coins' :
+                                   buff === 'idle' ? 'Idle→XP' :
+                                   buff === 'play' ? 'Play→XP' :
+                                   buff === 'quest' ? 'Quest Speed' :
+                                   buff}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="text-xs text-[#b8eaff] italic mb-1 text-center">{shadows[i].description}</div>
+                          <div className="flex items-center gap-2 justify-center mt-2">
+                            <span className="text-sm font-bold">Lv. {shadows[i].level}</span>
+                            <button
+                              className={`ml-2 px-2 py-1 rounded bg-[#00f7ff] text-[#0a0a1a] text-xs font-bold shadow hover:bg-[#00e6e6] transition ${shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              disabled={shadows[i].level >= MAX_SHADOW_LEVEL || currency < LEVEL_UP_COST(shadows[i].level)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                levelUpShadow(i);
+                              }}
+                              title={shadows[i].level >= MAX_SHADOW_LEVEL ? 'Max Level' : currency < LEVEL_UP_COST(shadows[i].level) ? 'Not enough coins' : `Level Up (${LEVEL_UP_COST(shadows[i].level)} coins)`}
+                            >
+                              Level Up
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <Ghost className="text-[#00f7ff]/30 group-hover:scale-110 group-hover:drop-shadow-[0_0_16px_#00f7ff] transition-all duration-200" size={36} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+  
+      {/* Music Player */}
+      <button 
+        onClick={() => setShowMusicPlayer(!showMusicPlayer)}
+        className="fixed bottom-4 left-4 system-button"
+      >
+        <Music size={24} />
+      </button>
+  
+      {/* Modals */}
+      {showMusicPlayer && <MusicPlayer />}
+      {isProfileOpen && <ProfileModal />}
+      {notification && (
+        <NotificationModal
+          type={notification.type}
+          message={notification.message}
+          onClose={() => setNotification(null)}
+        />
+      )}
+      {unboxShadow && <UnboxModal shadow={unboxShadow} onClose={() => setUnboxShadow(null)} />}
+    </div>
+  );
+};
+
+export default ProductivityTracker;
